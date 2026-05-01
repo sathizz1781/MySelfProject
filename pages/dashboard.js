@@ -30,8 +30,8 @@ const APPS = [
     icon: Activity,
     color: "#63ffb2",
     description: "Track workouts & vitals",
-    href: null,
-    live: false,
+    href: "/apps/health",
+    live: true,
   },
   {
     key: "habits",
@@ -39,8 +39,8 @@ const APPS = [
     icon: CheckSquare,
     color: "#ffd43b",
     description: "Build daily routines",
-    href: null,
-    live: false,
+    href: "/apps/habits",
+    live: true,
   },
   {
     key: "notes",
@@ -48,8 +48,8 @@ const APPS = [
     icon: FileText,
     color: "#f783ac",
     description: "Quick notes & ideas",
-    href: null,
-    live: false,
+    href: "/apps/notes",
+    live: true,
   },
   {
     key: "goals",
@@ -57,8 +57,8 @@ const APPS = [
     icon: Target,
     color: "#ffa94d",
     description: "Set & track goals",
-    href: null,
-    live: false,
+    href: "/apps/goals",
+    live: true,
   },
   {
     key: "calendar",
@@ -66,8 +66,8 @@ const APPS = [
     icon: Calendar,
     color: "#66d9e8",
     description: "Events & reminders",
-    href: null,
-    live: false,
+    href: "/apps/calendar",
+    live: true,
   },
 ];
 
