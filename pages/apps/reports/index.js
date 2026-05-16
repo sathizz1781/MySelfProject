@@ -310,7 +310,7 @@ function TxTable({ rows, amtColor, sign }) {
 }
 
 export async function getServerSideProps(ctx) {
-  const user = getAuthUser(ctx);
+  const user = getAuthUser(ctx.req);
   if (!user) return { redirect: { destination: "/login", permanent: false } };
   return { props: {} };
 }

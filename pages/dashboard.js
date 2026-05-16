@@ -101,95 +101,71 @@ export default function Dashboard({ user }) {
       <nav className="topbar">
         <div className="topbar-logo">
           <div className="topbar-logo-icon">
-            <Hexagon size={24} color="#6c63ff" strokeWidth={2} />
+            <Hexagon size={16} color="var(--accent)" strokeWidth={2.5} />
           </div>
           My World
         </div>
         <div className="topbar-user">
           <ThemePicker />
-          <div className="avatar">{initials}</div>
-          <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
-            {user.name}
-          </span>
           <button
             className="btn btn-ghost"
-            style={{ width: "auto", padding: "0.45rem 1rem", marginTop: 0 }}
+            style={{ width: "auto", padding: "0.38rem 0.85rem", marginTop: 0, fontSize: "0.8rem" }}
             onClick={handleLogout}
           >
             Sign out
           </button>
+          <div className="avatar">{initials}</div>
         </div>
       </nav>
 
       <main className="dashboard-content">
+        {/* Welcome hero */}
         <div className="welcome-section">
-          <h1>Hey, {user.name.split(" ")[0]} 👋</h1>
-          <p>Your personal space — all your apps in one place.</p>
+          <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1rem" }}>
+            <div style={{ width: 56, height: 56, borderRadius: "50%", background: "linear-gradient(135deg, var(--accent) 0%, #00875a 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.3rem", fontWeight: 800, color: "#000", flexShrink: 0, boxShadow: "0 0 24px var(--accent-glow)" }}>
+              {initials}
+            </div>
+            <div>
+              <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 600, marginBottom: "0.2rem", textTransform: "uppercase", letterSpacing: "0.06em" }}>Welcome back</div>
+              <h1 style={{ margin: 0, fontSize: "1.7rem" }}>{user.name.split(" ")[0]}</h1>
+            </div>
+          </div>
+          <p style={{ color: "var(--text-muted)", fontSize: "0.88rem" }}>Your personal finance & life dashboard — everything in one place.</p>
         </div>
 
-        <div style={{ marginTop: "0.5rem" }}>
-          <p
-            style={{
-              fontSize: "0.78rem",
-              textTransform: "uppercase",
-              letterSpacing: "0.08em",
-              color: "var(--text-muted)",
-              fontWeight: 600,
-              marginBottom: "1rem",
-            }}
-          >
-            My Apps
-          </p>
-          <div className="apps-grid">
-            {APPS.map((app) => {
-              const IconComponent = app.icon;
-              return app.live ? (
-                <Link key={app.key} href={app.href} className="app-icon-card">
-                  <div
-                    className="app-icon"
-                    style={{
-                      background: `${app.color}22`,
-                      border: `1px solid ${app.color}44`,
-                    }}
-                  >
-                    <IconComponent
-                      size={24}
-                      color={app.color}
-                      strokeWidth={2}
-                    />
-                  </div>
-                  <span className="app-icon-name">{app.name}</span>
-                  <span
-                    style={{
-                      fontSize: "0.7rem",
-                      color: "var(--text-muted)",
-                      textAlign: "center",
-                    }}
-                  >
-                    {app.description}
-                  </span>
-                </Link>
-              ) : (
-                <div key={app.key} className="app-icon-card disabled">
-                  <div
-                    className="app-icon"
-                    style={{
-                      background: "var(--surface2)",
-                      border: "1px solid var(--border)",
-                    }}
-                  >
-                    <IconComponent
-                      size={24}
-                      color="var(--text-muted)"
-                      strokeWidth={2}
-                    />
-                  </div>
-                  <span className="app-icon-name">{app.name}</span>
-                  <span className="app-coming-soon">Coming soon</span>
+        {/* Apps */}
+        <p style={{ fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.09em", color: "var(--text-muted)", fontWeight: 700, marginBottom: "1rem" }}>
+          My Apps
+        </p>
+        <div className="apps-grid">
+          {APPS.map((app) => {
+            const IconComponent = app.icon;
+            return app.live ? (
+              <Link key={app.key} href={app.href} className="app-icon-card">
+                <div
+                  className="app-icon"
+                  style={{
+                    background: `${app.color}20`,
+                    border: `1.5px solid ${app.color}40`,
+                  }}
+                >
+                  <IconComponent size={26} color={app.color} strokeWidth={2} />
                 </div>
-              );
-            })}
-          </div>
+                <span className="app-icon-name">{app.name}</span>
+                <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", textAlign: "center", lineHeight: 1.4 }}>
+                  {app.description}
+                </span>
+              </Link>
+            ) : (
+              <div key={app.key} className="app-icon-card disabled">
+                <div className="app-icon" style={{ background: "var(--surface2)", border: "1px solid var(--border)" }}>
+                  <IconComponent size={26} color="var(--text-muted)" strokeWidth={2} />
+                </div>
+                <span className="app-icon-name">{app.name}</span>
+                <span className="app-coming-soon">Coming soon</span>
+              </div>
+            );
+          })}
         </div>
       </main>
     </div>

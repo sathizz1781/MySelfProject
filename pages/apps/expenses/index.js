@@ -10,6 +10,7 @@ import {
   Gift, DollarSign, Users, Package2, Target, RefreshCw, Search,
   Download, Upload, Copy, X, ChevronLeft, ChevronRight,
   CreditCard, TrendingDown, PiggyBank, BarChart2, Landmark,
+  MoreHorizontal, Activity, ArrowUpRight, ArrowDownRight, Layers,
 } from "lucide-react";
 import { getAuthUser } from "../../../lib/auth";
 import {
@@ -66,6 +67,10 @@ function initLoanForm() {
   return { type: "borrowed", party: "", principal: "", alreadyPaid: "0", interestRate: "0", interestType: "none", emiAmount: "", purpose: "personal", currency: "INR", startDate: todayISO(), dueDate: "", notes: "" };
 }
 
+function initChitForm() {
+  return { name: "", organizer: "", groupSize: "", monthlyContribution: "", duration: "", startDate: todayISO(), currency: "INR", notes: "" };
+}
+
 function initInvestForm() {
   return { name: "", type: "mutual_fund", investedAmount: "", currentValue: "", units: "", avgPrice: "", currency: "INR", startDate: todayISO(), maturityDate: "", notes: "", schemeCode: "", stockSymbol: "", stockExchange: "NS" };
 }
@@ -88,6 +93,7 @@ const LOAN_PURPOSES = ["home", "car", "personal", "education", "business", "othe
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function ExpenseApp() {
   const [activeTab, setActiveTab] = useState("overview");
+  const [showMoreDrawer, setShowMoreDrawer] = useState(false);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
   const [viewMode, setViewMode] = useState("day");
@@ -182,6 +188,9 @@ export default function ExpenseApp() {
   const [investSaving, setInvestSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState("");
+  // Investment type filter
+  const [investTypeFilter, setInvestTypeFilter] = useState("all");
+
   // MF search
   const [mfQuery, setMfQuery] = useState("");
   const [mfResults, setMfResults] = useState([]);
@@ -189,6 +198,32 @@ export default function ExpenseApp() {
   const mfTimer = useRef(null);
   // Stock price fetch
   const [stockFetching, setStockFetching] = useState(false);
+
+  // XLSX import
+  const xlsxInputRef = useRef(null);
+  const [showXlsxModal, setShowXlsxModal] = useState(false);
+  const [xlsxPreview, setXlsxPreview] = useState(null);
+  const [xlsxBase64, setXlsxBase64] = useState("");
+  const [xlsxFilename, setXlsxFilename] = useState("");
+  const [xlsxImporting, setXlsxImporting] = useState(false);
+  const [xlsxMsg, setXlsxMsg] = useState("");
+
+  // Chit Funds
+  const [chits, setChits] = useState([]);
+  const [chitsLoading, setChitsLoading] = useState(false);
+  const [showChitModal, setShowChitModal] = useState(false);
+  const [editChit, setEditChit] = useState(null);
+  const [chitForm, setChitForm] = useState(initChitForm);
+  const [chitError, setChitError] = useState("");
+  const [chitSaving, setChitSaving] = useState(false);
+  const [showPayChitModal, setShowPayChitModal] = useState(false);
+  const [payChit, setPayChit] = useState(null);
+  const [chitPayForm, setChitPayForm] = useState({ month: currentMonth(), amount: "", dividend: "0", paidOn: todayISO(), notes: "" });
+  const [chitPaySaving, setChitPaySaving] = useState(false);
+  const [showPotModal, setShowPotModal] = useState(false);
+  const [potChit, setPotChit] = useState(null);
+  const [potForm, setPotForm] = useState({ potMonth: "1", potAmount: "", potReceived: true });
+  const [potSaving, setPotSaving] = useState(false);
 
   // Opening Balance
   const [openingBalance, setOpeningBalance] = useState(0);
@@ -210,6 +245,13 @@ export default function ExpenseApp() {
     if (activeTab === "budgets") fetchTemplates();
     if (activeTab === "loans") fetchLoans();
     if (activeTab === "investments") fetchInvestments();
+    if (activeTab === "overview") {
+      if (!investSummary) fetchInvestments();
+      if (!loans.length) fetchLoans();
+      if (!chits.length) fetchChits();
+      if (!goals.length) fetchGoals();
+    }
+    if (activeTab === "chit") fetchChits();
     if (activeTab === "analytics") fetchAnalytics();
   }, [activeTab]);
 
@@ -278,6 +320,13 @@ export default function ExpenseApp() {
     if (res.ok) setLoans((await res.json()).loans);
     setLoansLoading(false);
   }
+  async function fetchChits() {
+    setChitsLoading(true);
+    const res = await fetch("/api/chit-funds");
+    if (res.ok) setChits((await res.json()).chits);
+    setChitsLoading(false);
+  }
+
   async function fetchInvestments() {
     setInvestLoading(true);
     const res = await fetch("/api/investments");
@@ -524,6 +573,104 @@ export default function ExpenseApp() {
     fetchInvestments();
   }
 
+  // ── Chit Fund CRUD ────────────────────────────────────────────────────────────
+  function openAddChit() { setEditChit(null); setChitForm(initChitForm()); setChitError(""); setShowChitModal(true); }
+  function openEditChit(c) {
+    setEditChit(c);
+    setChitForm({ name: c.name, organizer: c.organizer || "", groupSize: String(c.groupSize), monthlyContribution: String(c.monthlyContribution), duration: String(c.duration), startDate: c.startDate?.slice(0, 10) || todayISO(), currency: c.currency || "INR", notes: c.notes || "" });
+    setChitError(""); setShowChitModal(true);
+  }
+  async function saveChit() {
+    if (!chitForm.name || !chitForm.groupSize || !chitForm.monthlyContribution || !chitForm.duration)
+      return setChitError("Name, group size, monthly contribution and duration are required.");
+    setChitSaving(true);
+    try {
+      const url = editChit ? `/api/chit-funds/${editChit._id}` : "/api/chit-funds";
+      const method = editChit ? "PUT" : "POST";
+      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...chitForm, groupSize: Number(chitForm.groupSize), monthlyContribution: Number(chitForm.monthlyContribution), duration: Number(chitForm.duration) }) });
+      if (res.ok) { setShowChitModal(false); fetchChits(); }
+      else setChitError((await res.json()).error || "Failed.");
+    } finally { setChitSaving(false); }
+  }
+  async function deleteChit(id) {
+    if (!confirm("Delete this chit fund?")) return;
+    await fetch(`/api/chit-funds/${id}`, { method: "DELETE" });
+    fetchChits();
+  }
+  function openPayChit(c) {
+    setPayChit(c);
+    setChitPayForm({ month: currentMonth(), amount: String(c.monthlyContribution), dividend: "0", paidOn: todayISO(), notes: "" });
+    setShowPayChitModal(true);
+  }
+  async function saveChitPayment() {
+    setChitPaySaving(true);
+    try {
+      const res = await fetch(`/api/chit-funds/${payChit._id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...chitPayForm, amount: Number(chitPayForm.amount), dividend: Number(chitPayForm.dividend || 0) }) });
+      if (res.ok) { setShowPayChitModal(false); fetchChits(); }
+    } finally { setChitPaySaving(false); }
+  }
+  function openPotModal(c) {
+    setPotChit(c);
+    const monthsElapsed = Math.ceil((Date.now() - new Date(c.startDate)) / (1000 * 60 * 60 * 24 * 30));
+    setPotForm({ potReceived: true, potMonth: String(Math.min(Math.max(1, monthsElapsed), c.duration)), potAmount: String(c.groupSize * c.monthlyContribution) });
+    setShowPotModal(true);
+  }
+  async function savePot() {
+    setPotSaving(true);
+    try {
+      const res = await fetch(`/api/chit-funds/${potChit._id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ potReceived: potForm.potReceived, potMonth: Number(potForm.potMonth), potAmount: Number(potForm.potAmount) }) });
+      if (res.ok) { setShowPotModal(false); fetchChits(); }
+    } finally { setPotSaving(false); }
+  }
+
+  async function handleXlsxFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setXlsxMsg("");
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const base64 = ev.target.result.split(",")[1];
+      setXlsxBase64(base64);
+      setXlsxFilename(file.name);
+      setXlsxImporting(true);
+      try {
+        const res = await fetch("/api/investments/import", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ file: base64, filename: file.name, preview: true }),
+        });
+        if (res.ok) {
+          setXlsxPreview(await res.json());
+          setShowXlsxModal(true);
+        } else {
+          setXlsxMsg((await res.json()).error || "Failed to parse file.");
+        }
+      } catch { setXlsxMsg("Network error."); }
+      finally { setXlsxImporting(false); e.target.value = ""; }
+    };
+    reader.readAsDataURL(file);
+  }
+
+  async function confirmXlsxImport() {
+    setXlsxImporting(true);
+    try {
+      const res = await fetch("/api/investments/import", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file: xlsxBase64, filename: xlsxFilename, preview: false }),
+      });
+      if (res.ok) {
+        const { created, total } = await res.json();
+        setXlsxMsg(`✓ Imported ${created} of ${total} investments.`);
+        setShowXlsxModal(false);
+        setXlsxPreview(null);
+        fetchInvestments();
+        setTimeout(() => setXlsxMsg(""), 5000);
+      } else {
+        setXlsxMsg((await res.json()).error || "Import failed.");
+      }
+    } catch { setXlsxMsg("Network error."); }
+    finally { setXlsxImporting(false); }
+  }
+
   // ── Expense CRUD ──────────────────────────────────────────────────────────────
   function openAdd() { setEditExpense(null); setForm(initForm()); setFormError(""); setShowModal(true); }
   function openEdit(exp) {
@@ -745,6 +892,7 @@ export default function ExpenseApp() {
     { key: "recurring",    label: "Recurring" },
     { key: "loans",        label: "Loans" },
     { key: "investments",  label: "Investments" },
+    { key: "chit",         label: "Chit Funds" },
     { key: "analytics",   label: "Analytics" },
     { key: "group",        label: "Group" },
   ];
@@ -779,72 +927,209 @@ export default function ExpenseApp() {
       ══════════════════════════════════════════════════════════════════ */}
       {activeTab === "overview" && (
         <div className="tab-content">
-          {/* Year / Month filters */}
-          <div className="filter-row" style={{ marginBottom: "1.25rem" }}>
-            <select value={selectedYear} onChange={e => setSelectedYear(parseInt(e.target.value))} className="form-input" style={{ width: "auto" }}>
-              {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i).map(y => <option key={y} value={y}>{y}</option>)}
-            </select>
-            <select value={selectedMonth} onChange={e => setSelectedMonth(parseInt(e.target.value))} className="form-input" style={{ width: "auto" }}>
-              {["January","February","March","April","May","June","July","August","September","October","November","December"]
-                .map((name, i) => <option key={i + 1} value={i + 1}>{name}</option>)}
-            </select>
-            {statsLoading && <span style={{ color: "var(--text-muted)", fontSize: "0.82rem" }}>Loading…</span>}
+          {/* Month picker row */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <select value={selectedYear} onChange={e => setSelectedYear(parseInt(e.target.value))} className="form-input" style={{ width: "auto", padding: "0.38rem 0.65rem", fontSize: "0.82rem" }}>
+                {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i).map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+              <select value={selectedMonth} onChange={e => setSelectedMonth(parseInt(e.target.value))} className="form-input" style={{ width: "auto", padding: "0.38rem 0.65rem", fontSize: "0.82rem" }}>
+                {["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+                  .map((name, i) => <option key={i + 1} value={i + 1}>{name}</option>)}
+              </select>
+            </div>
+            <button className="btn btn-ghost" style={{ width: "auto", padding: "0.35rem 0.75rem", fontSize: "0.75rem", marginTop: 0 }} onClick={downloadReport}>⬇ Report</button>
           </div>
 
-          {/* Summary cards */}
-          <div className="stat-grid" style={{ marginBottom: "1rem" }}>
-            <div className="stat-card">
-              <div className="stat-card-label">Expenses</div>
-              <div className="stat-card-value c-expense">{statsLoading ? "—" : fmt(stats?.totalExpense)}</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-card-label">Income</div>
-              <div className="stat-card-value c-income">{statsLoading ? "—" : fmt(stats?.totalIncome)}</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-card-label">Net Savings</div>
-              <div className={`stat-card-value ${(stats?.net || 0) >= 0 ? "c-pos" : "c-neg"}`}>{statsLoading ? "—" : fmt(stats?.net)}</div>
-            </div>
-          </div>
-
-          {/* Opening / Closing Balance card */}
-          <div className="chart-card" style={{ marginBottom: "1rem" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.6rem" }}>
-              <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Month Balance</div>
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                {!editingOpening ? (
-                  <button className="btn btn-ghost" style={{ width: "auto", padding: "0.28rem 0.65rem", fontSize: "0.72rem", marginTop: 0 }} onClick={() => { setOpeningInput(String(openingBalance)); setEditingOpening(true); }}>✏️ Opening Balance</button>
-                ) : (
-                  <div style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
-                    <input className="form-input" type="number" value={openingInput} onChange={e => setOpeningInput(e.target.value)} style={{ width: 110, padding: "0.3rem 0.5rem", fontSize: "0.82rem" }} autoFocus onKeyDown={e => e.key === "Enter" && saveOpeningBalance()} placeholder="Opening balance" />
-                    <button className="btn" style={{ width: "auto", padding: "0.3rem 0.65rem", fontSize: "0.78rem", marginTop: 0 }} onClick={saveOpeningBalance}>Save</button>
+          {/* Hero balance */}
+          {(() => {
+            const closing = openingBalance + (stats?.totalIncome || 0) - (stats?.totalExpense || 0);
+            const monthLabel = new Date(selectedYear, selectedMonth - 1).toLocaleString("en-IN", { month: "long", year: "numeric" });
+            return (
+              <div style={{ textAlign: "center", marginBottom: "1.5rem", padding: "1.5rem 0 0.5rem" }}>
+                <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, marginBottom: "0.6rem" }}>{monthLabel}</div>
+                <div style={{ fontSize: "2.8rem", fontWeight: 900, letterSpacing: "-0.05em", lineHeight: 1.1, color: closing >= 0 ? "var(--success)" : "var(--error)" }}>
+                  {statsLoading ? "—" : fmt(closing)}
+                </div>
+                <div style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: "0.5rem" }}>
+                  Closing balance · opening {fmt(openingBalance)}
+                  {!editingOpening && (
+                    <button onClick={() => { setOpeningInput(String(openingBalance)); setEditingOpening(true); }} style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", fontSize: "0.75rem", marginLeft: "0.5rem" }}>✏️</button>
+                  )}
+                </div>
+                {editingOpening && (
+                  <div style={{ display: "flex", gap: "0.4rem", alignItems: "center", justifyContent: "center", marginTop: "0.6rem" }}>
+                    <input className="form-input" type="number" value={openingInput} onChange={e => setOpeningInput(e.target.value)} style={{ width: 130, padding: "0.3rem 0.5rem", fontSize: "0.85rem", textAlign: "center" }} autoFocus onKeyDown={e => e.key === "Enter" && saveOpeningBalance()} />
+                    <button className="btn" style={{ width: "auto", padding: "0.3rem 0.65rem", fontSize: "0.8rem", marginTop: 0 }} onClick={saveOpeningBalance}>Save</button>
                     <button className="icon-btn" onClick={() => setEditingOpening(false)}>✕</button>
                   </div>
                 )}
-                <button className="btn btn-ghost" style={{ width: "auto", padding: "0.28rem 0.65rem", fontSize: "0.72rem", marginTop: 0 }} onClick={downloadReport}>⬇ Report</button>
               </div>
+            );
+          })()}
+
+          {/* Income / Expense 2-col */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", marginBottom: "1rem" }}>
+            <div style={{ background: "rgba(0,230,118,0.06)", border: "1px solid rgba(0,230,118,0.14)", borderRadius: "var(--radius-lg)", padding: "1rem 1.1rem" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.5rem" }}>
+                <div style={{ width: 28, height: 28, borderRadius: 8, background: "rgba(0,230,118,0.12)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <ArrowUpRight size={15} color="var(--success)" />
+                </div>
+                <span style={{ fontSize: "0.68rem", color: "var(--success)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>Income</span>
+              </div>
+              <div style={{ fontSize: "1.45rem", fontWeight: 800, letterSpacing: "-0.04em", color: "var(--success)" }}>{statsLoading ? "—" : fmt(stats?.totalIncome || 0)}</div>
             </div>
-            <div className="balance-4col">
-              <div>
-                <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.2rem" }}>Opening</div>
-                <div style={{ fontWeight: 600, fontSize: "0.85rem" }}>{fmt(openingBalance)}</div>
+            <div style={{ background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.14)", borderRadius: "var(--radius-lg)", padding: "1rem 1.1rem" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.5rem" }}>
+                <div style={{ width: 28, height: 28, borderRadius: 8, background: "rgba(248,113,113,0.12)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <ArrowDownRight size={15} color="var(--error)" />
+                </div>
+                <span style={{ fontSize: "0.68rem", color: "var(--error)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>Expenses</span>
               </div>
-              <div>
-                <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.2rem" }}>+ Income</div>
-                <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--success)" }}>{statsLoading ? "—" : fmt(stats?.totalIncome || 0)}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.2rem" }}>− Expenses</div>
-                <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--error)" }}>{statsLoading ? "—" : fmt(stats?.totalExpense || 0)}</div>
-              </div>
-              <div>
-                {(() => { const bal = openingBalance + (stats?.totalIncome || 0) - (stats?.totalExpense || 0); return <>
-                  <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.2rem" }}>Closing</div>
-                  <div style={{ fontWeight: 700, fontSize: "0.85rem", color: bal >= 0 ? "var(--success)" : "var(--error)" }}>{fmt(bal)}</div>
-                </>; })()}
-              </div>
+              <div style={{ fontSize: "1.45rem", fontWeight: 800, letterSpacing: "-0.04em", color: "var(--error)" }}>{statsLoading ? "—" : fmt(stats?.totalExpense || 0)}</div>
             </div>
           </div>
+
+          {/* Investment snapshot */}
+          {investSummary && investSummary.totalInvested > 0 && (
+            <div className="chart-card" style={{ marginBottom: "1rem", cursor: "pointer" }} onClick={() => setActiveTab("investments")}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
+                <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Portfolio</div>
+                <span style={{ fontSize: "0.72rem", color: "var(--accent-light)" }}>View all →</span>
+              </div>
+              <div className="snapshot-3col" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "0.5rem" }}>
+                <div>
+                  <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Invested</div>
+                  <div style={{ fontWeight: 600, fontSize: "0.88rem" }}>{fmt(investSummary.totalInvested)}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Current</div>
+                  <div style={{ fontWeight: 600, fontSize: "0.88rem", color: "var(--success)" }}>{fmt(investSummary.totalCurrent)}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Profit / Loss</div>
+                  <div style={{ fontWeight: 700, fontSize: "0.88rem", color: investSummary.totalGain >= 0 ? "var(--success)" : "var(--error)" }}>
+                    {investSummary.totalGain >= 0 ? "+" : ""}{fmt(investSummary.totalGain)}
+                    <span style={{ fontSize: "0.65rem", fontWeight: 500, marginLeft: "0.25rem" }}>({investSummary.gainPct >= 0 ? "+" : ""}{investSummary.gainPct.toFixed(1)}%)</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Loans snapshot */}
+          {loans.length > 0 && (() => {
+            const activeLoans = loans.filter(l => l.status === "active");
+            const borrowed    = activeLoans.filter(l => l.type === "borrowed");
+            const lent        = activeLoans.filter(l => l.type === "lent");
+            const totalOwed   = borrowed.reduce((s, l) => s + (l.outstanding || 0), 0);
+            const totalLent   = lent.reduce((s, l) => s + (l.outstanding || 0), 0);
+            if (activeLoans.length === 0) return null;
+            return (
+              <div className="chart-card" style={{ marginBottom: "1rem", cursor: "pointer" }} onClick={() => setActiveTab("loans")}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
+                  <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Loans</div>
+                  <span style={{ fontSize: "0.72rem", color: "var(--accent-light)" }}>View all →</span>
+                </div>
+                <div className="snapshot-3col" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "0.5rem" }}>
+                  <div>
+                    <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Active</div>
+                    <div style={{ fontWeight: 600, fontSize: "0.88rem" }}>{activeLoans.length} loan{activeLoans.length !== 1 ? "s" : ""}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>You Owe</div>
+                    <div style={{ fontWeight: 700, fontSize: "0.88rem", color: totalOwed > 0 ? "var(--error)" : "var(--text-muted)" }}>{fmt(totalOwed)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>You're Owed</div>
+                    <div style={{ fontWeight: 700, fontSize: "0.88rem", color: totalLent > 0 ? "var(--success)" : "var(--text-muted)" }}>{fmt(totalLent)}</div>
+                  </div>
+                </div>
+                {borrowed.slice(0, 2).map(l => (
+                  <div key={l._id} style={{ marginTop: "0.5rem", display: "flex", justifyContent: "space-between", fontSize: "0.72rem", color: "var(--text-muted)", borderTop: "1px solid var(--border)", paddingTop: "0.4rem" }}>
+                    <span>{l.party}</span>
+                    <span style={{ color: "var(--error)", fontWeight: 600 }}>{fmt(l.outstanding, l.currency)} outstanding</span>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+
+          {/* Chit Funds snapshot */}
+          {chits.length > 0 && (() => {
+            const activeChits   = chits.filter(c => c.status === "active");
+            const totalMonthly  = activeChits.reduce((s, c) => s + c.monthlyContribution, 0);
+            const totalPaid     = chits.reduce((s, c) => s + c.payments.reduce((ps, p) => ps + p.amount, 0), 0);
+            const potReceived   = chits.filter(c => c.potReceived).reduce((s, c) => s + c.potAmount, 0);
+            if (chits.length === 0) return null;
+            return (
+              <div className="chart-card" style={{ marginBottom: "1rem", cursor: "pointer" }} onClick={() => setActiveTab("chit")}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
+                  <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Chit Funds</div>
+                  <span style={{ fontSize: "0.72rem", color: "var(--accent-light)" }}>View all →</span>
+                </div>
+                <div className="snapshot-3col" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "0.5rem" }}>
+                  <div>
+                    <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Active</div>
+                    <div style={{ fontWeight: 600, fontSize: "0.88rem" }}>{activeChits.length} chit{activeChits.length !== 1 ? "s" : ""}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Monthly Out</div>
+                    <div style={{ fontWeight: 700, fontSize: "0.88rem", color: "var(--error)" }}>{fmt(totalMonthly)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Pot Received</div>
+                    <div style={{ fontWeight: 700, fontSize: "0.88rem", color: potReceived > 0 ? "var(--success)" : "var(--text-muted)" }}>{fmt(potReceived)}</div>
+                  </div>
+                </div>
+                {activeChits.slice(0, 2).map(c => {
+                  const done = c.payments.length;
+                  const pct  = Math.round((done / c.duration) * 100);
+                  return (
+                    <div key={c._id} style={{ marginTop: "0.5rem", borderTop: "1px solid var(--border)", paddingTop: "0.4rem" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", marginBottom: "0.25rem" }}>
+                        <span style={{ color: "var(--text)" }}>{c.name}</span>
+                        <span style={{ color: "var(--text-muted)" }}>Month {done}/{c.duration}</span>
+                      </div>
+                      <div style={{ height: 3, background: "var(--border)", borderRadius: 2, overflow: "hidden" }}>
+                        <div style={{ width: `${pct}%`, height: "100%", background: "#6c63ff" }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+
+          {/* Goals snapshot */}
+          {goals.length > 0 && (() => {
+            const activeGoals = goals.filter(g => !g.isCompleted);
+            if (activeGoals.length === 0) return null;
+            return (
+              <div className="chart-card" style={{ marginBottom: "1rem", cursor: "pointer" }} onClick={() => setActiveTab("goals")}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
+                  <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Savings Goals</div>
+                  <span style={{ fontSize: "0.72rem", color: "var(--accent-light)" }}>View all →</span>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                  {activeGoals.slice(0, 3).map(g => {
+                    const pct = Math.min(Math.round((g.savedAmount / g.targetAmount) * 100), 100);
+                    return (
+                      <div key={g._id}>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", marginBottom: "0.2rem" }}>
+                          <span style={{ fontWeight: 600 }}>{g.name}</span>
+                          <span style={{ color: "var(--text-muted)" }}>{fmt(g.savedAmount, g.currency)} / {fmt(g.targetAmount, g.currency)}</span>
+                        </div>
+                        <div style={{ height: 5, background: "var(--border)", borderRadius: 4, overflow: "hidden" }}>
+                          <div style={{ width: `${pct}%`, height: "100%", background: g.color || "var(--accent)", borderRadius: 4 }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Overall budget progress */}
           {overallBudget && (
@@ -1661,16 +1946,52 @@ export default function ExpenseApp() {
             </>
           )}
 
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: "0.5rem" }}>
-            <h3 style={{ fontSize: "0.9rem", fontWeight: 600 }}>Portfolio</h3>
-            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-              {refreshMsg && <span style={{ fontSize: "0.75rem", color: "var(--success)" }}>{refreshMsg}</span>}
-              <button className="btn btn-ghost" style={{ width: "auto", padding: "0.42rem 0.9rem", fontSize: "0.82rem", marginTop: 0 }} onClick={refreshAllPrices} disabled={refreshing}>
-                {refreshing ? "Refreshing…" : "⟳ Refresh Prices"}
+          {/* Action bar */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem", flexWrap: "wrap", gap: "0.5rem" }}>
+            <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+              {(refreshMsg || xlsxMsg) && (
+                <span style={{ fontSize: "0.75rem", color: "var(--success)", alignSelf: "center" }}>{refreshMsg || xlsxMsg}</span>
+              )}
+              <button className="btn btn-ghost" style={{ width: "auto", padding: "0.38rem 0.8rem", fontSize: "0.78rem", marginTop: 0 }} onClick={refreshAllPrices} disabled={refreshing}>
+                {refreshing ? "Refreshing…" : "⟳ Refresh"}
               </button>
-              <button className="btn" style={{ width: "auto", padding: "0.42rem 0.9rem", fontSize: "0.82rem", marginTop: 0 }} onClick={openAddInvest}>+ Add</button>
+              <input ref={xlsxInputRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleXlsxFile} />
+              <button className="btn btn-ghost" style={{ width: "auto", padding: "0.38rem 0.8rem", fontSize: "0.78rem", marginTop: 0 }} onClick={() => xlsxInputRef.current?.click()} disabled={xlsxImporting}>
+                {xlsxImporting ? "Parsing…" : "↑ Import"}
+              </button>
             </div>
+            <button className="btn" style={{ width: "auto", padding: "0.38rem 0.85rem", fontSize: "0.82rem", marginTop: 0 }} onClick={openAddInvest}>+ Add</button>
           </div>
+
+          {/* Type filter tabs — only show types that exist */}
+          {investments.length > 0 && (() => {
+            const presentTypes = ["all", ...Array.from(new Set(investments.map(i => i.type)))];
+            return (
+              <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+                {presentTypes.map(key => {
+                  const t    = INVEST_TYPES.find(t => t.key === key);
+                  const isActive = investTypeFilter === key;
+                  const count = key === "all" ? investments.length : investments.filter(i => i.type === key).length;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => setInvestTypeFilter(key)}
+                      style={{
+                        padding: "0.28rem 0.7rem", borderRadius: 20, border: "1px solid",
+                        fontSize: "0.72rem", fontWeight: 600, cursor: "pointer",
+                        background: isActive ? (t?.color || "var(--accent)") : "transparent",
+                        borderColor: isActive ? (t?.color || "var(--accent)") : "var(--border)",
+                        color: isActive ? "#fff" : "var(--text-muted)",
+                        transition: "all 0.15s",
+                      }}
+                    >
+                      {key === "all" ? "All" : (t?.label || key)} <span style={{ opacity: 0.75 }}>{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })()}
 
           {investLoading ? (
             <div className="empty-state">Loading…</div>
@@ -1679,60 +2000,172 @@ export default function ExpenseApp() {
               <div className="empty-state-icon"><PiggyBank size={28} /></div>
               No investments tracked.<br /><span style={{ fontSize: "0.78rem" }}>Add MF, stocks, FD, gold…</span>
             </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-              {investments.map(inv => {
-                const gain    = inv.currentValue - inv.investedAmount;
-                const gainPct = inv.investedAmount > 0 ? (gain / inv.investedAmount) * 100 : 0;
-                const t       = INVEST_TYPES.find(t => t.key === inv.type);
-                return (
-                  <div key={inv._id} className="invest-card">
-                    <div className="invest-header">
-                      <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", minWidth: 0 }}>
-                        <div className="invest-type-dot" style={{ background: t?.color || "#6b7280" }} />
+          ) : (() => {
+            const filtered = investTypeFilter === "all" ? investments : investments.filter(i => i.type === investTypeFilter);
+            if (filtered.length === 0) return <div className="empty-state" style={{ padding: "2rem 0" }}>No investments in this category.</div>;
+            return (
+              <div style={{ background: "var(--surface2)", borderRadius: "var(--radius)", overflow: "hidden" }}>
+                {/* Column header */}
+                <div className="invest-list-header">
+                  <span>Company</span>
+                  <span style={{ textAlign: "right" }}>Returns (%)</span>
+                  <span className="invest-col-invested" style={{ textAlign: "right" }}>Current (Invested)</span>
+                  <span />
+                </div>
+
+                {filtered.map((inv, idx) => {
+                  const gain    = inv.currentValue - inv.investedAmount;
+                  const gainPct = inv.investedAmount > 0 ? (gain / inv.investedAmount) * 100 : 0;
+                  const t       = INVEST_TYPES.find(t => t.key === inv.type);
+                  const isLast  = idx === filtered.length - 1;
+                  return (
+                    <div key={inv._id} className="invest-list-row" style={{ borderBottom: isLast ? "none" : "1px solid var(--border)" }}>
+
+                      {/* Company col */}
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", minWidth: 0, paddingRight: "0.5rem" }}>
+                        <div style={{ width: 3, alignSelf: "stretch", borderRadius: 2, background: t?.color || "#6b7280", flexShrink: 0, minHeight: 36 }} />
                         <div style={{ minWidth: 0 }}>
-                          <div style={{ fontWeight: 600, fontSize: "0.875rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{inv.name}</div>
-                          <div style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>{t?.label || inv.type}</div>
+                          <div style={{ fontWeight: 600, fontSize: "0.85rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{inv.name}</div>
+                          <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: "0.1rem", display: "flex", gap: "0.35rem", flexWrap: "wrap" }}>
+                            {inv.units > 0 && <span>{inv.units} {inv.units === 1 ? "unit" : "units"}</span>}
+                            {inv.avgPrice > 0 && <span>· Avg {fmt(inv.avgPrice, inv.currency)}</span>}
+                            {investTypeFilter === "all" && <span style={{ color: t?.color || "#6b7280" }}>· {t?.label || inv.type}</span>}
+                            {inv.lastPriceAt && <span>· {new Date(inv.lastPriceAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</span>}
+                          </div>
                         </div>
                       </div>
-                      <div style={{ display: "flex", gap: "0.3rem", alignItems: "center", flexShrink: 0 }}>
-                        <button className="icon-btn" onClick={() => openEditInvest(inv)}>✏️</button>
-                        <button className="icon-btn" onClick={() => deleteInvest(inv._id)}>🗑️</button>
-                      </div>
-                    </div>
-                    <div className="invest-values">
-                      <div>
-                        <div style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>Invested</div>
-                        <div style={{ fontWeight: 600, fontSize: "0.875rem" }}>{fmt(inv.investedAmount, inv.currency)}</div>
-                      </div>
-                      <div>
-                        <div style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>Current</div>
-                        <div style={{ fontWeight: 600, fontSize: "0.875rem" }}>{fmt(inv.currentValue, inv.currency)}</div>
-                      </div>
-                      <div>
-                        <div style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>Gain/Loss</div>
-                        <div style={{ fontWeight: 700, fontSize: "0.875rem", color: gain >= 0 ? "var(--success)" : "var(--error)" }}>
+
+                      {/* Returns col */}
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: "0.82rem", fontWeight: 700, color: gain >= 0 ? "var(--success)" : "var(--error)" }}>
                           {gain >= 0 ? "+" : ""}{fmt(gain, inv.currency)}
-                          <span style={{ fontSize: "0.65rem", marginLeft: "0.2rem" }}>({gainPct >= 0 ? "+" : ""}{gainPct.toFixed(1)}%)</span>
+                        </div>
+                        <div style={{ fontSize: "0.72rem", fontWeight: 600, color: gain >= 0 ? "var(--success)" : "var(--error)", marginTop: "0.1rem" }}>
+                          {gainPct >= 0 ? "+" : ""}{gainPct.toFixed(2)}%
+                        </div>
+                      </div>
+
+                      {/* Current (Invested) col — hidden on mobile via CSS */}
+                      <div className="invest-col-invested" style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: "0.82rem", fontWeight: 600 }}>{fmt(inv.currentValue, inv.currency)}</div>
+                        <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "0.1rem" }}>{fmt(inv.investedAmount, inv.currency)}</div>
+                      </div>
+
+                      {/* Actions col */}
+                      <div style={{ display: "flex", flexDirection: "column", gap: "0.15rem", alignItems: "flex-end" }}>
+                        <button className="icon-btn" style={{ fontSize: "0.75rem", padding: "0.15rem 0.3rem" }} onClick={() => openEditInvest(inv)}>✏️</button>
+                        <button className="icon-btn" style={{ fontSize: "0.75rem", padding: "0.15rem 0.3rem" }} onClick={() => deleteInvest(inv._id)}>🗑️</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════
+          CHIT FUNDS TAB
+      ══════════════════════════════════════════════════════════════════ */}
+      {activeTab === "chit" && (
+        <div className="tab-content">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+            <h3 style={{ fontSize: "0.9rem", fontWeight: 600 }}>Chit Funds</h3>
+            <button className="btn" style={{ width: "auto", padding: "0.42rem 0.9rem", fontSize: "0.82rem", marginTop: 0 }} onClick={openAddChit}>+ Add Chit</button>
+          </div>
+
+          {chitsLoading ? (
+            <div className="empty-state">Loading…</div>
+          ) : chits.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-state-icon">🪙</div>
+              No chit funds yet.<br /><span style={{ fontSize: "0.78rem" }}>Track your rotating savings schemes here.</span>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+              {chits.map(c => {
+                const pool       = c.groupSize * c.monthlyContribution;
+                const totalPaid  = c.payments.reduce((s, p) => s + p.amount, 0);
+                const totalDiv   = c.payments.reduce((s, p) => s + (p.dividend || 0), 0);
+                const totalIn    = totalPaid - totalDiv;
+                const totalOut   = c.potReceived ? c.potAmount : 0;
+                const pnl        = totalOut + totalDiv - totalPaid;
+                const monthsDone = c.payments.length;
+                const progress   = Math.round((monthsDone / c.duration) * 100);
+                const remaining  = (c.duration - monthsDone) * c.monthlyContribution;
+                return (
+                  <div key={c._id} style={{ background: "var(--surface2)", borderRadius: "var(--radius)", padding: "1rem" }}>
+                    {/* Header */}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.6rem" }}>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: "0.9rem" }}>{c.name}</div>
+                        {c.organizer && <div style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>{c.organizer}</div>}
+                      </div>
+                      <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+                        <span style={{ fontSize: "0.68rem", padding: "0.2rem 0.5rem", borderRadius: 20, background: c.status === "active" ? "var(--success)22" : "var(--text-muted)22", color: c.status === "active" ? "var(--success)" : "var(--text-muted)", fontWeight: 600 }}>
+                          {c.status}
+                        </span>
+                        <button className="icon-btn" onClick={() => openEditChit(c)}>✏️</button>
+                        <button className="icon-btn" onClick={() => deleteChit(c._id)}>🗑️</button>
+                      </div>
+                    </div>
+
+                    {/* Scheme details */}
+                    <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "0.6rem" }}>
+                      {c.groupSize} members · ₹{c.monthlyContribution.toLocaleString("en-IN")}/month · Pool ₹{pool.toLocaleString("en-IN")} · {c.duration} months
+                    </div>
+
+                    {/* Progress bar */}
+                    <div style={{ marginBottom: "0.6rem" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.7rem", color: "var(--text-muted)", marginBottom: "0.25rem" }}>
+                        <span>Month {monthsDone} of {c.duration}</span>
+                        <span>{progress}%</span>
+                      </div>
+                      <div style={{ height: 5, background: "var(--border)", borderRadius: 4, overflow: "hidden" }}>
+                        <div style={{ width: `${progress}%`, height: "100%", background: "#6c63ff", borderRadius: 4 }} />
+                      </div>
+                    </div>
+
+                    {/* Pot received */}
+                    <div style={{ marginBottom: "0.6rem" }}>
+                      {c.potReceived ? (
+                        <div style={{ fontSize: "0.75rem", color: "var(--success)", fontWeight: 600 }}>
+                          ✓ Pot received in Month {c.potMonth} — {fmt(c.potAmount, c.currency)}
+                        </div>
+                      ) : (
+                        <button onClick={() => openPotModal(c)} style={{ fontSize: "0.72rem", color: "#6c63ff", background: "none", border: "none", cursor: "pointer", padding: 0, fontWeight: 600 }}>
+                          + Mark Pot Received
+                        </button>
+                      )}
+                    </div>
+
+                    {/* P&L grid */}
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "0.4rem", marginBottom: "0.75rem" }}>
+                      <div style={{ background: "var(--surface)", borderRadius: 8, padding: "0.4rem 0.6rem" }}>
+                        <div style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>Paid In</div>
+                        <div style={{ fontSize: "0.8rem", fontWeight: 600 }}>{fmt(totalPaid, c.currency)}</div>
+                      </div>
+                      <div style={{ background: "var(--surface)", borderRadius: 8, padding: "0.4rem 0.6rem" }}>
+                        <div style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>Dividends</div>
+                        <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--success)" }}>+{fmt(totalDiv, c.currency)}</div>
+                      </div>
+                      <div style={{ background: "var(--surface)", borderRadius: 8, padding: "0.4rem 0.6rem" }}>
+                        <div style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>Net P&L</div>
+                        <div style={{ fontSize: "0.8rem", fontWeight: 700, color: pnl >= 0 ? "var(--success)" : "var(--error)" }}>
+                          {pnl >= 0 ? "+" : ""}{fmt(pnl, c.currency)}
                         </div>
                       </div>
                     </div>
-                    {inv.units > 0 && (
-                      <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginTop: "0.35rem" }}>
-                        {inv.units} units · Avg {fmt(inv.avgPrice, inv.currency)}
+                    {remaining > 0 && (
+                      <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: "0.6rem" }}>
+                        Remaining contributions: {fmt(remaining, c.currency)} ({c.duration - monthsDone} months)
                       </div>
                     )}
-                    {inv.maturityDate && (
-                      <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginTop: "0.2rem" }}>
-                        Matures {formatDate(inv.maturityDate)}
-                      </div>
-                    )}
-                    {inv.notes && <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginTop: "0.2rem" }}>{inv.notes}</div>}
-                    {inv.lastPriceAt && (
-                      <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginTop: "0.25rem" }}>
-                        Price updated {new Date(inv.lastPriceAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
-                      </div>
-                    )}
+
+                    <button className="btn btn-ghost" style={{ width: "auto", padding: "0.35rem 0.85rem", fontSize: "0.78rem", marginTop: 0 }} onClick={() => openPayChit(c)}>
+                      + Record Payment
+                    </button>
                   </div>
                 );
               })}
@@ -1866,8 +2299,76 @@ export default function ExpenseApp() {
         </div>
       )}
 
-      {/* FAB */}
-      {activeTab === "transactions" && <button className="fab" onClick={openAdd}>+</button>}
+      {/* FAB — primary add action per tab */}
+      {(() => {
+        const fabMap = {
+          transactions: openAdd,
+          loans:        openAddLoan,
+          investments:  openAddInvest,
+          chit:         openAddChit,
+          goals:        openAddGoal,
+          recurring:    openAddRecurring,
+        };
+        const handler = fabMap[activeTab];
+        return handler ? <button className="fab" onClick={handler}>+</button> : null;
+      })()}
+
+      {/* ── Bottom navigation (mobile only) ─────────────────────────────── */}
+      <nav className="bottom-nav">
+        {[
+          { key: "overview",      icon: Home,          label: "Home" },
+          { key: "transactions",  icon: Activity,      label: "Activity" },
+          { key: "investments",   icon: TrendingUp,    label: "Invest" },
+          { key: "loans",         icon: Landmark,      label: "Loans" },
+        ].map(({ key, icon: Icon, label }) => (
+          <button
+            key={key}
+            className={`bottom-nav-item${activeTab === key ? " active" : ""}`}
+            onClick={() => setActiveTab(key)}
+          >
+            <Icon size={20} strokeWidth={activeTab === key ? 2.5 : 1.8} />
+            <span>{label}</span>
+          </button>
+        ))}
+        <button
+          className={`bottom-nav-item${showMoreDrawer ? " active" : ""}`}
+          onClick={() => setShowMoreDrawer(v => !v)}
+        >
+          <MoreHorizontal size={20} strokeWidth={1.8} />
+          <span>More</span>
+        </button>
+      </nav>
+
+      {/* ── More drawer (mobile only) ────────────────────────────────────── */}
+      {showMoreDrawer && (
+        <>
+          <div className="more-drawer-backdrop" onClick={() => setShowMoreDrawer(false)} />
+          <div className="more-drawer">
+            <div className="more-drawer-handle" />
+            <div className="more-drawer-grid">
+              {[
+                { key: "budgets",    icon: BarChart2,     label: "Budgets" },
+                { key: "goals",      icon: Target,        label: "Goals" },
+                { key: "recurring",  icon: RefreshCw,     label: "Recurring" },
+                { key: "chit",       icon: Layers,        label: "Chit Funds" },
+                { key: "analytics",  icon: TrendingDown,  label: "Analytics" },
+                { key: "group",      icon: Users,         label: "Group" },
+              ].map(({ key, icon: Icon, label }) => (
+                <button
+                  key={key}
+                  className={`more-drawer-item${activeTab === key ? " active" : ""}`}
+                  onClick={() => { setActiveTab(key); setShowMoreDrawer(false); }}
+                >
+                  <div className="more-drawer-icon">
+                    <Icon size={22} strokeWidth={1.8} />
+                  </div>
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
 
       {/* ══════════════════════════════════════════════════════════════════
           ADD / EDIT EXPENSE MODAL
@@ -2220,12 +2721,16 @@ export default function ExpenseApp() {
             {/* Type selector */}
             <div className="form-group">
               <label className="form-label">Type</label>
-              <div className="invest-type-grid">
-                {INVEST_TYPES.map(t => (
-                  <button key={t.key} className={`invest-type-btn ${investForm.type === t.key ? "selected" : ""}`} style={investForm.type === t.key ? { borderColor: t.color, background: `${t.color}18`, color: t.color } : {}} onClick={() => { setInvestForm(f => ({ ...f, type: t.key, schemeCode: "", stockSymbol: "" })); setMfQuery(""); setMfResults([]); }}>
-                    {t.label}
-                  </button>
-                ))}
+              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                <div style={{ width: 10, height: 10, borderRadius: "50%", background: INVEST_TYPES.find(t => t.key === investForm.type)?.color || "#6b7280", flexShrink: 0 }} />
+                <select
+                  className="form-input"
+                  style={{ flex: 1 }}
+                  value={investForm.type}
+                  onChange={e => { setInvestForm(f => ({ ...f, type: e.target.value, schemeCode: "", stockSymbol: "" })); setMfQuery(""); setMfResults([]); }}
+                >
+                  {INVEST_TYPES.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
+                </select>
               </div>
             </div>
 
@@ -2325,6 +2830,180 @@ export default function ExpenseApp() {
 
             {investError && <div className="alert alert-error">{investError}</div>}
             <button className="btn" onClick={saveInvest} disabled={investSaving}>{investSaving ? "Saving…" : editInvest ? "Update" : "Add Investment"}</button>
+          </div>
+        </div>
+      )}
+
+      {/* Chit Fund add/edit modal */}
+      {showChitModal && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowChitModal(false)}>
+          <div className="modal">
+            <div className="modal-title">
+              <span>{editChit ? "Edit Chit Fund" : "Add Chit Fund"}</span>
+              <button className="icon-btn" onClick={() => setShowChitModal(false)}>✕</button>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Chit Name</label>
+              <input className="form-input" placeholder="e.g. Madurai Chit 2024" value={chitForm.name} onChange={e => setChitForm(f => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Organizer / Company <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span></label>
+              <input className="form-input" placeholder="e.g. Shriram Chits" value={chitForm.organizer} onChange={e => setChitForm(f => ({ ...f, organizer: e.target.value }))} />
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label className="form-label">Group Size (members)</label>
+                <input className="form-input" type="number" min="2" placeholder="20" value={chitForm.groupSize} onChange={e => setChitForm(f => ({ ...f, groupSize: e.target.value, duration: e.target.value }))} />
+              </div>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label className="form-label">Monthly Contribution (₹)</label>
+                <input className="form-input" type="number" min="1" placeholder="5000" value={chitForm.monthlyContribution} onChange={e => setChitForm(f => ({ ...f, monthlyContribution: e.target.value }))} />
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label className="form-label">Duration (months)</label>
+                <input className="form-input" type="number" min="1" value={chitForm.duration} onChange={e => setChitForm(f => ({ ...f, duration: e.target.value }))} />
+              </div>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label className="form-label">Start Date</label>
+                <input className="form-input" type="date" value={chitForm.startDate} onChange={e => setChitForm(f => ({ ...f, startDate: e.target.value }))} />
+              </div>
+            </div>
+            {chitForm.groupSize && chitForm.monthlyContribution && (
+              <div style={{ fontSize: "0.78rem", color: "var(--success)", marginBottom: "0.75rem", fontWeight: 600 }}>
+                Pool per month: ₹{(Number(chitForm.groupSize) * Number(chitForm.monthlyContribution)).toLocaleString("en-IN")}
+              </div>
+            )}
+            <div className="form-group">
+              <label className="form-label">Notes <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span></label>
+              <input className="form-input" placeholder="Any details…" value={chitForm.notes} onChange={e => setChitForm(f => ({ ...f, notes: e.target.value }))} />
+            </div>
+            {chitError && <div className="alert alert-error">{chitError}</div>}
+            <button className="btn" onClick={saveChit} disabled={chitSaving}>{chitSaving ? "Saving…" : editChit ? "Update" : "Add Chit Fund"}</button>
+          </div>
+        </div>
+      )}
+
+      {/* Record payment modal */}
+      {showPayChitModal && payChit && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowPayChitModal(false)}>
+          <div className="modal" style={{ maxWidth: 420 }}>
+            <div className="modal-title">
+              <span>Record Payment — {payChit.name}</span>
+              <button className="icon-btn" onClick={() => setShowPayChitModal(false)}>✕</button>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Month</label>
+              <input className="form-input" type="month" value={chitPayForm.month} onChange={e => setChitPayForm(f => ({ ...f, month: e.target.value }))} />
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label className="form-label">Amount Paid (₹)</label>
+                <input className="form-input" type="number" min="0" value={chitPayForm.amount} onChange={e => setChitPayForm(f => ({ ...f, amount: e.target.value }))} />
+              </div>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label className="form-label">Dividend Received (₹)</label>
+                <input className="form-input" type="number" min="0" value={chitPayForm.dividend} onChange={e => setChitPayForm(f => ({ ...f, dividend: e.target.value }))} />
+              </div>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Paid On</label>
+              <input className="form-input" type="date" value={chitPayForm.paidOn} onChange={e => setChitPayForm(f => ({ ...f, paidOn: e.target.value }))} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Notes <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span></label>
+              <input className="form-input" placeholder="e.g. paid via bank transfer" value={chitPayForm.notes} onChange={e => setChitPayForm(f => ({ ...f, notes: e.target.value }))} />
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+              <button className="btn btn-ghost" style={{ width: "auto" }} onClick={() => setShowPayChitModal(false)}>Cancel</button>
+              <button className="btn" style={{ width: "auto" }} onClick={saveChitPayment} disabled={chitPaySaving}>{chitPaySaving ? "Saving…" : "Save Payment"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pot received modal */}
+      {showPotModal && potChit && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowPotModal(false)}>
+          <div className="modal" style={{ maxWidth: 400 }}>
+            <div className="modal-title">
+              <span>Pot Received — {potChit.name}</span>
+              <button className="icon-btn" onClick={() => setShowPotModal(false)}>✕</button>
+            </div>
+            <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginBottom: "0.75rem" }}>
+              Full pool: ₹{(potChit.groupSize * potChit.monthlyContribution).toLocaleString("en-IN")}
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label className="form-label">Month Number</label>
+                <input className="form-input" type="number" min="1" max={potChit.duration} value={potForm.potMonth} onChange={e => setPotForm(f => ({ ...f, potMonth: e.target.value }))} />
+              </div>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label className="form-label">Amount Received (₹)</label>
+                <input className="form-input" type="number" min="0" value={potForm.potAmount} onChange={e => setPotForm(f => ({ ...f, potAmount: e.target.value }))} />
+              </div>
+            </div>
+            {potForm.potAmount && (potChit.groupSize * potChit.monthlyContribution) > Number(potForm.potAmount) && (
+              <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "0.6rem" }}>
+                Bid discount: ₹{((potChit.groupSize * potChit.monthlyContribution) - Number(potForm.potAmount)).toLocaleString("en-IN")} shared among {potChit.groupSize} members
+              </div>
+            )}
+            <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+              <button className="btn btn-ghost" style={{ width: "auto" }} onClick={() => setShowPotModal(false)}>Cancel</button>
+              <button className="btn" style={{ width: "auto" }} onClick={savePot} disabled={potSaving}>{potSaving ? "Saving…" : "Confirm"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* XLSX import preview modal */}
+      {showXlsxModal && xlsxPreview && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowXlsxModal(false)}>
+          <div className="modal" style={{ maxWidth: 520 }}>
+            <div className="modal-title">
+              <span>Import Preview</span>
+              <button className="icon-btn" onClick={() => setShowXlsxModal(false)}>✕</button>
+            </div>
+
+            <div style={{ padding: "0 0 0.5rem" }}>
+              <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginBottom: "0.75rem" }}>
+                Found <strong style={{ color: "var(--text)" }}>{xlsxPreview.count}</strong>{" "}
+                {xlsxPreview.format === "mf" ? "mutual funds" : "stocks"} in this file.
+                {xlsxPreview.count > 5 ? ` Showing first 5 below.` : ""}
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem", maxHeight: 300, overflowY: "auto", marginBottom: "1rem" }}>
+                {xlsxPreview.preview.map((inv, i) => {
+                  const gain = inv.currentValue - inv.investedAmount;
+                  const t = INVEST_TYPES.find(t => t.key === inv.type);
+                  return (
+                    <div key={i} style={{ background: "var(--surface2)", borderRadius: 8, padding: "0.5rem 0.75rem", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem" }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: "0.82rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{inv.name}</div>
+                        <div style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>{t?.label || inv.type}</div>
+                        {inv.units > 0 && <div style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>{inv.units} units</div>}
+                      </div>
+                      <div style={{ textAlign: "right", flexShrink: 0 }}>
+                        <div style={{ fontSize: "0.8rem", fontWeight: 600 }}>₹{Number(inv.currentValue || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</div>
+                        <div style={{ fontSize: "0.68rem", color: gain >= 0 ? "var(--success)" : "var(--error)" }}>
+                          {gain >= 0 ? "+" : "−"}₹{Math.abs(gain).toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {xlsxMsg && <div className="alert alert-error" style={{ marginBottom: "0.75rem" }}>{xlsxMsg}</div>}
+
+              <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+                <button className="btn btn-ghost" style={{ width: "auto" }} onClick={() => setShowXlsxModal(false)}>Cancel</button>
+                <button className="btn" style={{ width: "auto" }} onClick={confirmXlsxImport} disabled={xlsxImporting}>
+                  {xlsxImporting ? "Importing…" : `Import All ${xlsxPreview.count}`}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
