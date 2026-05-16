@@ -181,9 +181,19 @@ export default function ExpenseApp() {
   const [investError, setInvestError] = useState("");
   const [investSaving, setInvestSaving] = useState(false);
 
+  // Opening Balance
+  const [openingBalance, setOpeningBalance] = useState(0);
+  const [editingOpening, setEditingOpening] = useState(false);
+  const [openingInput, setOpeningInput] = useState("");
+
+  // Analytics
+  const [analytics, setAnalytics] = useState(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+
   // ── Effects ──────────────────────────────────────────────────────────────────
   useEffect(() => { fetchStats(); }, [selectedYear, selectedMonth]);
   useEffect(() => { fetchExpenses(); }, [selectedYear, selectedMonth, txView, txCategory, txTag, txMerchant]);
+  useEffect(() => { fetchOpeningBalance(); }, [selectedYear, selectedMonth]);
   useEffect(() => {
     if (activeTab === "group") { fetchGroup(); fetchSettle(); fetchActivity(); }
     if (activeTab === "goals") fetchGoals();
@@ -191,6 +201,7 @@ export default function ExpenseApp() {
     if (activeTab === "budgets") fetchTemplates();
     if (activeTab === "loans") fetchLoans();
     if (activeTab === "investments") fetchInvestments();
+    if (activeTab === "analytics") fetchAnalytics();
   }, [activeTab]);
 
   // Debounced search
@@ -263,6 +274,25 @@ export default function ExpenseApp() {
     const res = await fetch("/api/investments");
     if (res.ok) { const d = await res.json(); setInvestments(d.investments); setInvestSummary(d.summary); }
     setInvestLoading(false);
+  }
+
+  async function fetchOpeningBalance() {
+    const res = await fetch(`/api/monthly-balance?year=${selectedYear}&month=${selectedMonth}`);
+    if (res.ok) { const d = await res.json(); setOpeningBalance(d.openingBalance); }
+  }
+
+  async function saveOpeningBalance() {
+    const val = parseFloat(openingInput);
+    if (isNaN(val)) return;
+    const res = await fetch("/api/monthly-balance", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ year: selectedYear, month: selectedMonth, openingBalance: val }) });
+    if (res.ok) { setOpeningBalance(val); setEditingOpening(false); }
+  }
+
+  async function fetchAnalytics() {
+    setAnalyticsLoading(true);
+    const res = await fetch(`/api/expenses/stats?year=${selectedYear}&selectedMonth=${selectedMonth}`);
+    if (res.ok) setAnalytics(await res.json());
+    setAnalyticsLoading(false);
   }
 
   // ── Loan CRUD ─────────────────────────────────────────────────────────────────
@@ -560,6 +590,7 @@ export default function ExpenseApp() {
     { key: "recurring",    label: "Recurring" },
     { key: "loans",        label: "Loans" },
     { key: "investments",  label: "Investments" },
+    { key: "analytics",   label: "Analytics" },
     { key: "group",        label: "Group" },
   ];
 
@@ -797,6 +828,40 @@ export default function ExpenseApp() {
       ══════════════════════════════════════════════════════════════════ */}
       {activeTab === "transactions" && (
         <div className="tab-content tx-section">
+          {/* Opening Balance Card */}
+          <div className="chart-card" style={{ marginBottom: "1rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.6rem" }}>
+              <div className="chart-title" style={{ marginBottom: 0 }}>Month Balance</div>
+              {!editingOpening ? (
+                <button className="icon-btn" style={{ fontSize: "0.75rem" }} onClick={() => { setOpeningInput(String(openingBalance)); setEditingOpening(true); }}>✏️ Set Opening</button>
+              ) : (
+                <div style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
+                  <input className="form-input" type="number" value={openingInput} onChange={e => setOpeningInput(e.target.value)} style={{ width: 110, padding: "0.3rem 0.5rem", fontSize: "0.82rem" }} autoFocus onKeyDown={e => e.key === "Enter" && saveOpeningBalance()} />
+                  <button className="btn" style={{ width: "auto", padding: "0.3rem 0.65rem", fontSize: "0.78rem", marginTop: 0 }} onClick={saveOpeningBalance}>Save</button>
+                  <button className="icon-btn" onClick={() => setEditingOpening(false)}>✕</button>
+                </div>
+              )}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "0.5rem", textAlign: "center" }}>
+              <div>
+                <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginBottom: "0.2rem" }}>Opening</div>
+                <div style={{ fontWeight: 600, fontSize: "0.82rem" }}>{fmt(openingBalance)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginBottom: "0.2rem" }}>+ Income</div>
+                <div style={{ fontWeight: 600, fontSize: "0.82rem", color: "var(--success)" }}>+{fmt(stats?.totalIncome || 0)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginBottom: "0.2rem" }}>− Expense</div>
+                <div style={{ fontWeight: 600, fontSize: "0.82rem", color: "var(--error)" }}>−{fmt(stats?.totalExpense || 0)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginBottom: "0.2rem" }}>Balance</div>
+                {(() => { const bal = openingBalance + (stats?.totalIncome || 0) - (stats?.totalExpense || 0); return <div style={{ fontWeight: 700, fontSize: "0.82rem", color: bal >= 0 ? "var(--success)" : "var(--error)" }}>{fmt(bal)}</div>; })()}
+              </div>
+            </div>
+          </div>
+
           {/* Month / Year picker */}
           <div className="filter-row" style={{ marginBottom: "0.75rem" }}>
             <select value={selectedYear} onChange={e => setSelectedYear(parseInt(e.target.value))} className="form-input" style={{ width: "auto" }}>
@@ -1284,32 +1349,53 @@ export default function ExpenseApp() {
                       </div>
                     </div>
 
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", margin: "0.5rem 0 0.3rem" }}>
-                      <span style={{ color: "var(--text-muted)" }}>Outstanding</span>
-                      <span style={{ fontWeight: 700, color: l.type === "borrowed" ? "var(--error)" : "var(--success)" }}>{fmt(l.outstanding, l.currency)}</span>
+                    {/* Paid / Remaining / Principal row */}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.4rem", margin: "0.5rem 0 0.4rem", textAlign: "center" }}>
+                      <div style={{ background: "var(--surface2)", borderRadius: 8, padding: "0.4rem 0.3rem" }}>
+                        <div style={{ fontSize: "0.58rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Principal</div>
+                        <div style={{ fontWeight: 600, fontSize: "0.78rem" }}>{fmt(l.principal, l.currency)}</div>
+                      </div>
+                      <div style={{ background: "rgba(52,211,153,0.1)", borderRadius: 8, padding: "0.4rem 0.3rem" }}>
+                        <div style={{ fontSize: "0.58rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Paid</div>
+                        <div style={{ fontWeight: 700, fontSize: "0.78rem", color: "var(--success)" }}>{fmt(l.principal - l.outstanding, l.currency)}</div>
+                      </div>
+                      <div style={{ background: l.type === "borrowed" ? "rgba(248,113,113,0.1)" : "rgba(52,211,153,0.08)", borderRadius: 8, padding: "0.4rem 0.3rem" }}>
+                        <div style={{ fontSize: "0.58rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Remaining</div>
+                        <div style={{ fontWeight: 700, fontSize: "0.78rem", color: l.type === "borrowed" ? "var(--error)" : "var(--success)" }}>{fmt(l.outstanding, l.currency)}</div>
+                      </div>
                     </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: "0.45rem" }}>
-                      <span>Principal {fmt(l.principal, l.currency)}</span>
-                      <span>
-                        {daysLeft !== null && (
-                          <span style={{ color: overdue ? "var(--error)" : daysLeft < 15 ? "#ffd43b" : "var(--text-muted)" }}>
-                            {overdue ? `${Math.abs(daysLeft)}d overdue` : `Due in ${daysLeft}d`}
-                          </span>
-                        )}
-                        {l.interestRate > 0 && <span> · {l.interestRate}% p.a.</span>}
-                        {l.emiAmount > 0 && <span> · EMI {fmt(l.emiAmount, l.currency)}</span>}
-                      </span>
-                    </div>
+
+                    {/* Progress bar */}
                     {l.status === "active" && (
-                      <div className="progress-track">
-                        <div className="progress-fill" style={{ width: `${paidPct}%`, background: "var(--success)" }} />
-                      </div>
+                      <>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.65rem", color: "var(--text-muted)", marginBottom: "0.25rem" }}>
+                          <span>{paidPct.toFixed(0)}% paid</span>
+                          <span style={{ display: "flex", gap: "0.75rem" }}>
+                            {l.emiAmount > 0 && (() => {
+                              const paidInstallments = Math.round((l.principal - l.outstanding) / l.emiAmount);
+                              const totalInstallments = Math.round(l.principal / l.emiAmount);
+                              return <span>EMI {fmt(l.emiAmount, l.currency)} · {paidInstallments}/{totalInstallments} installments</span>;
+                            })()}
+                            {l.interestRate > 0 && <span>{l.interestRate}% p.a.</span>}
+                          </span>
+                        </div>
+                        <div className="progress-track">
+                          <div className="progress-fill" style={{ width: `${paidPct}%`, background: "var(--success)" }} />
+                        </div>
+                      </>
                     )}
-                    {l.payments?.length > 0 && (
-                      <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: "0.4rem" }}>
-                        {l.payments.length} payment{l.payments.length !== 1 ? "s" : ""} · Last: {fmt(l.payments[l.payments.length - 1].amount, l.currency)} on {formatDate(l.payments[l.payments.length - 1].date)}
-                      </div>
-                    )}
+
+                    {/* Due date + last payment */}
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.67rem", color: "var(--text-muted)", marginTop: "0.4rem" }}>
+                      {daysLeft !== null ? (
+                        <span style={{ color: overdue ? "var(--error)" : daysLeft < 15 ? "#ffd43b" : "var(--text-muted)" }}>
+                          {overdue ? `${Math.abs(daysLeft)}d overdue` : `Due in ${daysLeft}d`}
+                        </span>
+                      ) : <span />}
+                      {l.payments?.length > 0 && (
+                        <span>{l.payments.length} payment{l.payments.length !== 1 ? "s" : ""} · Last {fmt(l.payments[l.payments.length - 1].amount, l.currency)} on {formatDate(l.payments[l.payments.length - 1].date)}</span>
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -1447,6 +1533,131 @@ export default function ExpenseApp() {
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════
+          ANALYTICS TAB
+      ══════════════════════════════════════════════════════════════════ */}
+      {activeTab === "analytics" && (
+        <div className="tab-content">
+          <div className="filter-row" style={{ marginBottom: "1.25rem" }}>
+            <select value={selectedYear} onChange={e => setSelectedYear(parseInt(e.target.value))} className="form-input" style={{ width: "auto" }}>
+              {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i).map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+            {analyticsLoading && <span style={{ color: "var(--text-muted)", fontSize: "0.82rem" }}>Loading…</span>}
+          </div>
+
+          {/* Summary stats */}
+          {analytics && (
+            <div className="stat-grid" style={{ marginBottom: "1.25rem" }}>
+              <div className="stat-card">
+                <div className="stat-card-label">Total Spent ({selectedYear})</div>
+                <div className="stat-card-value c-expense">{fmt(analytics.yearMonths?.reduce((s, m) => s + m.total, 0) || 0)}</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-card-label">Avg / Month</div>
+                <div className="stat-card-value">{fmt(Math.round((analytics.yearMonths?.reduce((s, m) => s + m.total, 0) || 0) / 12))}</div>
+              </div>
+              {analytics.totalIncome > 0 && (
+                <div className="stat-card" style={{ gridColumn: "1 / -1" }}>
+                  <div className="stat-card-label">Savings Rate (this month)</div>
+                  <div className={`stat-card-value ${analytics.net >= 0 ? "c-pos" : "c-neg"}`}>
+                    {analytics.totalIncome > 0 ? `${Math.round((analytics.net / analytics.totalIncome) * 100)}%` : "—"}
+                    <span style={{ fontSize: "0.72rem", fontWeight: 400, marginLeft: "0.5rem", color: "var(--text-muted)" }}>({fmt(analytics.net)} saved)</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 6-month income vs expense trend */}
+          <div className="chart-card" style={{ marginBottom: "1rem" }}>
+            <div className="chart-title">6-Month Income vs Expense</div>
+            {analyticsLoading ? <div style={{ textAlign: "center", padding: "2rem", color: "var(--text-muted)" }}>Loading…</div> : (
+              <ResponsiveContainer width="100%" height={180}>
+                <BarChart data={analytics?.byMonth || []} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                  <XAxis dataKey="label" tick={{ fill: "var(--text-muted)", fontSize: 11 }} />
+                  <YAxis tick={{ fill: "var(--text-muted)", fontSize: 10 }} />
+                  <Tooltip contentStyle={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 8, fontSize: "0.8rem" }} formatter={v => fmt(v)} />
+                  <Bar dataKey="income"  fill="#34d399" radius={[3, 3, 0, 0]} name="Income" />
+                  <Bar dataKey="expense" fill="#f87171" radius={[3, 3, 0, 0]} name="Expense" />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+
+          {/* Monthly savings trend */}
+          <div className="chart-card" style={{ marginBottom: "1rem" }}>
+            <div className="chart-title">Monthly Savings Trend</div>
+            {analyticsLoading ? <div style={{ textAlign: "center", padding: "2rem", color: "var(--text-muted)" }}>Loading…</div> : (
+              <ResponsiveContainer width="100%" height={150}>
+                <LineChart data={(analytics?.byMonth || []).map(m => ({ label: m.label, saved: m.income - m.expense }))} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                  <XAxis dataKey="label" tick={{ fill: "var(--text-muted)", fontSize: 11 }} />
+                  <YAxis tick={{ fill: "var(--text-muted)", fontSize: 10 }} />
+                  <Tooltip contentStyle={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 8, fontSize: "0.8rem" }} formatter={v => fmt(v)} />
+                  <Line type="monotone" dataKey="saved" stroke="#8b85ff" strokeWidth={2} dot={{ r: 3, fill: "#6c63ff" }} name="Saved" />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+
+          {/* Year monthly breakdown table */}
+          <div className="chart-card" style={{ marginBottom: "1rem" }}>
+            <div className="chart-title">{selectedYear} Monthly Spending</div>
+            {analyticsLoading ? <div style={{ textAlign: "center", padding: "2rem", color: "var(--text-muted)" }}>Loading…</div> : (
+              <div className="year-months-grid">
+                {(analytics?.yearMonths || []).map(m => (
+                  <div key={m.month} className={`year-month-card ${m.month === selectedMonth ? "selected" : ""}`} onClick={() => { setSelectedMonth(m.month); setActiveTab("overview"); }}>
+                    <div className="year-month-name">{m.name}</div>
+                    <div className="year-month-total">{fmt(m.total)}</div>
+                    <div className="year-month-count">{m.count} tx</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Category breakdown */}
+          <div className="chart-card" style={{ marginBottom: "1rem" }}>
+            <div className="chart-title">Top Categories (this month)</div>
+            {analyticsLoading ? <div style={{ textAlign: "center", padding: "2rem", color: "var(--text-muted)" }}>Loading…</div> : analytics?.byCategory?.length > 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.55rem" }}>
+                {analytics.byCategory.map((c, i) => {
+                  const pct = analytics.totalExpense > 0 ? Math.round((c.total / analytics.totalExpense) * 100) : 0;
+                  return (
+                    <div key={c.category}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.78rem", marginBottom: "0.2rem" }}>
+                        <span style={{ textTransform: "capitalize" }}>{c.category}</span>
+                        <span style={{ color: "var(--text-muted)" }}>{fmt(c.total)} <span style={{ color: CHART_COLORS[i % CHART_COLORS.length] }}>· {pct}%</span></span>
+                      </div>
+                      <div className="progress-track">
+                        <div className="progress-fill" style={{ width: `${pct}%`, background: CHART_COLORS[i % CHART_COLORS.length] }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : <div className="empty-state" style={{ padding: "1.5rem 0" }}>No expense data for this month.</div>}
+          </div>
+
+          {/* 5-year totals */}
+          <div className="chart-card">
+            <div className="chart-title">5-Year Overview</div>
+            {analyticsLoading ? <div style={{ textAlign: "center", padding: "2rem", color: "var(--text-muted)" }}>Loading…</div> : (
+              <ResponsiveContainer width="100%" height={150}>
+                <BarChart data={analytics?.yearTotals || []} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                  <XAxis dataKey="year" tick={{ fill: "var(--text-muted)", fontSize: 11 }} />
+                  <YAxis tick={{ fill: "var(--text-muted)", fontSize: 10 }} />
+                  <Tooltip contentStyle={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 8, fontSize: "0.8rem" }} formatter={v => fmt(v)} />
+                  <Bar dataKey="total" fill="#6c63ff" radius={[3, 3, 0, 0]} name="Total Spent" />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
         </div>
       )}
 
