@@ -1786,3 +1786,30 @@ select.form-input {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* ─── Balance card 4-col → 2×2 on mobile ───────────────────────────── */
+.balance-4col {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.5rem;
+  text-align: center;
+}
+@media (max-width: 520px) {
+  .balance-4col {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ─── Loan card 3-col breakdown ─────────────────────────────────────── */
+.loan-breakdown-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.4rem;
+  margin: 0.5rem 0 0.4rem;
+  text-align: center;
+}
+@media (max-width: 360px) {
+  .loan-breakdown-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

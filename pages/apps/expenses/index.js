@@ -738,7 +738,7 @@ export default function ExpenseApp() {
                 <button className="btn btn-ghost" style={{ width: "auto", padding: "0.28rem 0.65rem", fontSize: "0.72rem", marginTop: 0 }} onClick={downloadReport}>⬇ Report</button>
               </div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "0.5rem", textAlign: "center" }}>
+            <div className="balance-4col">
               <div>
                 <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.2rem" }}>Opening</div>
                 <div style={{ fontWeight: 600, fontSize: "0.85rem" }}>{fmt(openingBalance)}</div>
@@ -950,7 +950,7 @@ export default function ExpenseApp() {
                 </div>
               )}
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "0.5rem", textAlign: "center" }}>
+            <div className="balance-4col">
               <div>
                 <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginBottom: "0.2rem" }}>Opening</div>
                 <div style={{ fontWeight: 600, fontSize: "0.82rem" }}>{fmt(openingBalance)}</div>
@@ -1458,7 +1458,7 @@ export default function ExpenseApp() {
                     </div>
 
                     {/* Paid / Remaining / Principal row */}
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.4rem", margin: "0.5rem 0 0.4rem", textAlign: "center" }}>
+                    <div className="loan-breakdown-grid">
                       <div style={{ background: "var(--surface2)", borderRadius: 8, padding: "0.4rem 0.3rem" }}>
                         <div style={{ fontSize: "0.58rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Principal</div>
                         <div style={{ fontWeight: 600, fontSize: "0.78rem" }}>{fmt(l.principal, l.currency)}</div>
