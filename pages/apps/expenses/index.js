@@ -63,7 +63,7 @@ function initRecurringForm() {
 }
 
 function initLoanForm() {
-  return { type: "borrowed", party: "", principal: "", interestRate: "0", interestType: "none", emiAmount: "", purpose: "personal", currency: "INR", startDate: todayISO(), dueDate: "", notes: "" };
+  return { type: "borrowed", party: "", principal: "", alreadyPaid: "0", interestRate: "0", interestType: "none", emiAmount: "", purpose: "personal", currency: "INR", startDate: todayISO(), dueDate: "", notes: "" };
 }
 
 function initInvestForm() {
@@ -295,12 +295,78 @@ export default function ExpenseApp() {
     setAnalyticsLoading(false);
   }
 
+  async function downloadReport() {
+    const p = new URLSearchParams({ year: selectedYear.toString(), selectedMonth: selectedMonth.toString() });
+    const [expRes, statsRes] = await Promise.all([
+      fetch(`/api/expenses?${p}`),
+      fetch(`/api/expenses/stats?${p}`),
+    ]);
+    if (!expRes.ok || !statsRes.ok) return alert("Failed to fetch report data.");
+    const { expenses: txns } = await expRes.json();
+    const s = await statsRes.json();
+    const monthName = new Date(selectedYear, selectedMonth - 1, 1).toLocaleString("en-IN", { month: "long", year: "numeric" });
+    const closingBalance = openingBalance + s.totalIncome - s.totalExpense;
+    const incomes  = txns.filter(t => t.type === "income");
+    const expenses = txns.filter(t => t.type === "expense");
+    const fmtAmt   = (n) => "₹" + Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+    const fmtDate  = (d) => new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+    const row = (cells, bold = false) => `<tr>${cells.map(c => `<td style="padding:6px 10px;border-bottom:1px solid #2a2a3a;${bold?"font-weight:700;background:#1a1a2a":""}">${c}</td>`).join("")}</tr>`;
+    const section = (title, color, rows, total) => `
+      <h3 style="color:${color};font-size:13px;margin:20px 0 6px;text-transform:uppercase;letter-spacing:.06em">${title}</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;background:#111118;border-radius:8px;overflow:hidden">
+        <thead><tr style="background:#1e1e2e">${["Date","Description","Category","Merchant","Amount"].map(h=>`<th style="padding:7px 10px;text-align:left;color:#8888aa;font-weight:600">${h}</th>`).join("")}</tr></thead>
+        <tbody>
+          ${rows.map(t => row([fmtDate(t.date), t.description||"—", t.category||"—", t.merchant||"—", `<span style="color:${color};font-weight:600">${fmtAmt(t.amount)}</span>`])).join("")}
+          ${row(["","","","<b>Total</b>", `<span style="color:${color};font-weight:700">${fmtAmt(total)}</span>`], true)}
+        </tbody>
+      </table>`;
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Report — ${monthName}</title>
+      <style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',sans-serif;background:#0d0d1a;color:#f0f0f8;padding:32px}@media print{body{background:#fff;color:#000}}</style>
+      </head><body>
+      <div style="max-width:780px;margin:auto">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;padding-bottom:16px;border-bottom:2px solid #2a2a3a">
+          <div>
+            <div style="font-size:22px;font-weight:700;color:#8b85ff">My World</div>
+            <div style="font-size:13px;color:#8888aa">Financial Report — ${monthName}</div>
+          </div>
+          <button onclick="window.print()" style="background:#6c63ff;color:#fff;border:none;padding:8px 18px;border-radius:8px;cursor:pointer;font-size:13px">Print / Save PDF</button>
+        </div>
+
+        <h2 style="font-size:15px;margin-bottom:12px;color:#c0bfff">Summary</h2>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;background:#111118;border-radius:8px;overflow:hidden">
+          <tbody>
+            ${row(["Opening Balance", `<span style="font-weight:600">${fmtAmt(openingBalance)}</span>`])}
+            ${row(["Total Income", `<span style="color:#34d399;font-weight:600">+ ${fmtAmt(s.totalIncome)}</span>`])}
+            ${row(["Total Expenses", `<span style="color:#f87171;font-weight:600">− ${fmtAmt(s.totalExpense)}</span>`])}
+            ${row(["Net Savings", `<span style="color:${s.net>=0?"#34d399":"#f87171"};font-weight:600">${s.net>=0?"+":""}${fmtAmt(s.net)}</span>`])}
+            ${row(["Closing Balance", `<span style="font-weight:700;font-size:14px;color:${closingBalance>=0?"#34d399":"#f87171"}">${fmtAmt(closingBalance)}</span>`], true)}
+          </tbody>
+        </table>
+
+        ${incomes.length > 0  ? section("Income",  "#34d399", incomes,  s.totalIncome)  : ""}
+        ${expenses.length > 0 ? section("Expenses", "#f87171", expenses, s.totalExpense) : ""}
+
+        ${s.byCategory?.length > 0 ? `
+        <h3 style="color:#8888aa;font-size:13px;margin:20px 0 6px;text-transform:uppercase;letter-spacing:.06em">Spending by Category</h3>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;background:#111118;border-radius:8px;overflow:hidden">
+          <tbody>${s.byCategory.map(c => row([c.category.charAt(0).toUpperCase()+c.category.slice(1), `${c.count} transaction${c.count!==1?"s":""}`, `<span style="color:#f87171;font-weight:600">${fmtAmt(c.total)}</span>`, `${s.totalExpense>0?Math.round((c.total/s.totalExpense)*100):0}%`])).join("")}</tbody>
+        </table>` : ""}
+
+        <div style="margin-top:28px;font-size:11px;color:#555;text-align:center">Generated on ${new Date().toLocaleDateString("en-IN",{day:"numeric",month:"long",year:"numeric"})} · My World App</div>
+      </div></body></html>`;
+    const w = window.open("", "_blank");
+    w.document.write(html);
+    w.document.close();
+  }
+
   // ── Loan CRUD ─────────────────────────────────────────────────────────────────
   function openAddLoan() { setEditLoan(null); setLoanForm(initLoanForm()); setLoanError(""); setShowLoanModal(true); }
   function openEditLoan(l) {
     setEditLoan(l);
+    const paid = Math.max(0, (l.principal || 0) - (l.outstanding || 0));
     setLoanForm({
       type: l.type, party: l.party, principal: String(l.principal),
+      alreadyPaid: String(paid),
       interestRate: String(l.interestRate || 0), interestType: l.interestType || "none",
       emiAmount: String(l.emiAmount || ""), purpose: l.purpose || "personal",
       currency: l.currency || "INR", startDate: l.startDate?.slice(0, 10) || todayISO(),
@@ -311,11 +377,14 @@ export default function ExpenseApp() {
   async function saveLoan() {
     if (!loanForm.party || !loanForm.principal) return setLoanError("Party name and principal are required.");
     if (Number(loanForm.principal) <= 0) return setLoanError("Principal must be greater than 0.");
+    const principal   = Number(loanForm.principal);
+    const alreadyPaid = Math.min(Number(loanForm.alreadyPaid || 0), principal);
+    const outstanding = principal - alreadyPaid;
     setLoanSaving(true);
     try {
       const url = editLoan ? `/api/loans/${editLoan._id}` : "/api/loans";
       const method = editLoan ? "PUT" : "POST";
-      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...loanForm, principal: Number(loanForm.principal), interestRate: Number(loanForm.interestRate || 0), emiAmount: Number(loanForm.emiAmount || 0) }) });
+      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...loanForm, principal, outstanding, interestRate: Number(loanForm.interestRate || 0), emiAmount: Number(loanForm.emiAmount || 0) }) });
       if (res.ok) { setShowLoanModal(false); fetchLoans(); }
       else setLoanError((await res.json()).error || "Failed.");
     } finally { setLoanSaving(false); }
@@ -637,7 +706,7 @@ export default function ExpenseApp() {
           </div>
 
           {/* Summary cards */}
-          <div className="stat-grid" style={{ marginBottom: "1.25rem" }}>
+          <div className="stat-grid" style={{ marginBottom: "1rem" }}>
             <div className="stat-card">
               <div className="stat-card-label">Expenses</div>
               <div className="stat-card-value c-expense">{statsLoading ? "—" : fmt(stats?.totalExpense)}</div>
@@ -647,8 +716,47 @@ export default function ExpenseApp() {
               <div className="stat-card-value c-income">{statsLoading ? "—" : fmt(stats?.totalIncome)}</div>
             </div>
             <div className="stat-card">
-              <div className="stat-card-label">Net</div>
+              <div className="stat-card-label">Net Savings</div>
               <div className={`stat-card-value ${(stats?.net || 0) >= 0 ? "c-pos" : "c-neg"}`}>{statsLoading ? "—" : fmt(stats?.net)}</div>
+            </div>
+          </div>
+
+          {/* Opening / Closing Balance card */}
+          <div className="chart-card" style={{ marginBottom: "1rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.6rem" }}>
+              <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Month Balance</div>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                {!editingOpening ? (
+                  <button className="btn btn-ghost" style={{ width: "auto", padding: "0.28rem 0.65rem", fontSize: "0.72rem", marginTop: 0 }} onClick={() => { setOpeningInput(String(openingBalance)); setEditingOpening(true); }}>✏️ Opening Balance</button>
+                ) : (
+                  <div style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
+                    <input className="form-input" type="number" value={openingInput} onChange={e => setOpeningInput(e.target.value)} style={{ width: 110, padding: "0.3rem 0.5rem", fontSize: "0.82rem" }} autoFocus onKeyDown={e => e.key === "Enter" && saveOpeningBalance()} placeholder="Opening balance" />
+                    <button className="btn" style={{ width: "auto", padding: "0.3rem 0.65rem", fontSize: "0.78rem", marginTop: 0 }} onClick={saveOpeningBalance}>Save</button>
+                    <button className="icon-btn" onClick={() => setEditingOpening(false)}>✕</button>
+                  </div>
+                )}
+                <button className="btn btn-ghost" style={{ width: "auto", padding: "0.28rem 0.65rem", fontSize: "0.72rem", marginTop: 0 }} onClick={downloadReport}>⬇ Report</button>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "0.5rem", textAlign: "center" }}>
+              <div>
+                <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.2rem" }}>Opening</div>
+                <div style={{ fontWeight: 600, fontSize: "0.85rem" }}>{fmt(openingBalance)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.2rem" }}>+ Income</div>
+                <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--success)" }}>{statsLoading ? "—" : fmt(stats?.totalIncome || 0)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.2rem" }}>− Expenses</div>
+                <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--error)" }}>{statsLoading ? "—" : fmt(stats?.totalExpense || 0)}</div>
+              </div>
+              <div>
+                {(() => { const bal = openingBalance + (stats?.totalIncome || 0) - (stats?.totalExpense || 0); return <>
+                  <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.2rem" }}>Closing</div>
+                  <div style={{ fontWeight: 700, fontSize: "0.85rem", color: bal >= 0 ? "var(--success)" : "var(--error)" }}>{fmt(bal)}</div>
+                </>; })()}
+              </div>
             </div>
           </div>
 
@@ -1909,6 +2017,17 @@ export default function ExpenseApp() {
                   {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Already Paid <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)" }}>(for partially paid loans)</span></label>
+              <input className="form-input" type="number" min="0" placeholder="0" value={loanForm.alreadyPaid} onChange={e => setLoanForm(f => ({ ...f, alreadyPaid: e.target.value }))} />
+              {Number(loanForm.alreadyPaid) > 0 && Number(loanForm.principal) > 0 && (
+                <div style={{ fontSize: "0.72rem", marginTop: "0.3rem", display: "flex", gap: "1rem" }}>
+                  <span style={{ color: "var(--success)" }}>Paid: {fmt(Math.min(Number(loanForm.alreadyPaid), Number(loanForm.principal)), loanForm.currency)}</span>
+                  <span style={{ color: "var(--error)" }}>Remaining: {fmt(Math.max(0, Number(loanForm.principal) - Number(loanForm.alreadyPaid)), loanForm.currency)}</span>
+                </div>
+              )}
             </div>
 
             <div className="form-group">
