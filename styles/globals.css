@@ -1107,7 +1107,7 @@ select.form-input {
   background: rgba(0, 0, 0, 0.6);
   backdrop-filter: blur(5px);
   -webkit-backdrop-filter: blur(5px);
-  z-index: 100;
+  z-index: 300;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1834,28 +1834,20 @@ select.form-input {
     font-size: 1.35rem;
   }
 
-  /* Modal — bottom sheet on mobile */
+  /* Modal — centered card on mobile (avoids keyboard / bottom-nav overlap) */
   .modal-overlay {
-    align-items: flex-end;
-    padding: 0;
+    align-items: center;
+    padding: 1rem;
     backdrop-filter: blur(3px);
     -webkit-backdrop-filter: blur(3px);
   }
   .modal {
-    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-    max-height: 93vh;
-    padding: 1.25rem 1.25rem 2rem;
-    /* Drag handle visual cue */
-    padding-top: 1.5rem;
+    border-radius: var(--radius-xl);
+    max-height: 88vh;
+    padding: 1.25rem;
   }
   .modal::before {
-    content: "";
-    display: block;
-    width: 36px;
-    height: 4px;
-    background: var(--border-hover);
-    border-radius: 999px;
-    margin: -0.5rem auto 1rem;
+    display: none;
   }
   .modal-title {
     margin-bottom: 1rem;
