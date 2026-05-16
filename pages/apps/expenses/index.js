@@ -117,7 +117,7 @@ function calcAmortization(principal, annualRate, tenureMonths, interestType) {
 }
 
 function initLoanForm() {
-  return { type: "borrowed", party: "", principal: "", alreadyPaid: "0", interestRate: "0", interestType: "none", tenureMonths: "", emiDay: "1", emiAmount: "", purpose: "personal", currency: "INR", startDate: todayISO(), dueDate: "", notes: "" };
+  return { type: "borrowed", party: "", loanNumber: "", principal: "", alreadyPaid: "0", interestRate: "0", interestType: "none", tenureMonths: "", emiDay: "1", emiAmount: "", purpose: "personal", currency: "INR", startDate: todayISO(), dueDate: "", notes: "" };
 }
 
 function initChitForm() {
@@ -125,7 +125,7 @@ function initChitForm() {
 }
 
 function initInvestForm() {
-  return { name: "", type: "mutual_fund", investedAmount: "", currentValue: "", units: "", avgPrice: "", currency: "INR", startDate: todayISO(), maturityDate: "", notes: "", schemeCode: "", stockSymbol: "", stockExchange: "NS" };
+  return { name: "", type: "mutual_fund", investmentMode: "lumpsum", sipAmount: "", sipDay: "1", investedAmount: "", currentValue: "", units: "", avgPrice: "", currency: "INR", startDate: todayISO(), maturityDate: "", notes: "", schemeCode: "", stockSymbol: "", stockExchange: "NS" };
 }
 
 const INVEST_TYPES = [
@@ -229,6 +229,16 @@ export default function ExpenseApp({ user }) {
   const [paymentNote, setPaymentNote] = useState("");
   const [paymentDate, setPaymentDate] = useState(todayISO());
   const [paymentSaving, setPaymentSaving] = useState(false);
+  const [paymentRecordTx, setPaymentRecordTx] = useState(true);
+
+  // SIP / contribution modal
+  const [showContribModal, setShowContribModal] = useState(false);
+  const [contribTarget, setContribTarget] = useState(null);
+  const [contribAmount, setContribAmount] = useState("");
+  const [contribDate, setContribDate] = useState(todayISO());
+  const [contribNote, setContribNote] = useState("");
+  const [contribRecordTx, setContribRecordTx] = useState(true);
+  const [contribSaving, setContribSaving] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(null);
 
   // Investments
@@ -480,7 +490,7 @@ export default function ExpenseApp({ user }) {
     setEditLoan(l);
     const paid = Math.max(0, (l.principal || 0) - (l.outstanding || 0));
     setLoanForm({
-      type: l.type, party: l.party, principal: String(l.principal),
+      type: l.type, party: l.party, loanNumber: l.loanNumber || "", principal: String(l.principal),
       alreadyPaid: String(paid),
       interestRate: String(l.interestRate || 0), interestType: l.interestType || "none",
       tenureMonths: String(l.tenureMonths || ""), emiDay: String(l.emiDay || "1"), emiAmount: String(l.emiAmount || ""), purpose: l.purpose || "personal",
@@ -518,9 +528,18 @@ export default function ExpenseApp({ user }) {
     if (!paymentAmount || Number(paymentAmount) <= 0) return;
     setPaymentSaving(true);
     try {
-      const res = await fetch(`/api/loans/${paymentLoan._id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ amount: Number(paymentAmount), date: paymentDate, note: paymentNote }) });
-      if (res.ok) { setShowPaymentModal(false); fetchLoans(); }
+      const res = await fetch(`/api/loans/${paymentLoan._id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ amount: Number(paymentAmount), date: paymentDate, note: paymentNote, recordTransaction: paymentRecordTx }) });
+      if (res.ok) { setShowPaymentModal(false); fetchLoans(); if (paymentRecordTx) fetchStats(); }
     } finally { setPaymentSaving(false); }
+  }
+
+  async function saveContrib() {
+    if (!contribAmount || Number(contribAmount) <= 0) return;
+    setContribSaving(true);
+    try {
+      const res = await fetch(`/api/investments/${contribTarget._id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ amount: Number(contribAmount), date: contribDate, note: contribNote, recordTransaction: contribRecordTx }) });
+      if (res.ok) { setShowContribModal(false); fetchInvestments(); if (contribRecordTx) fetchStats(); }
+    } finally { setContribSaving(false); }
   }
 
   // ── Investment CRUD ───────────────────────────────────────────────────────────
@@ -531,7 +550,10 @@ export default function ExpenseApp({ user }) {
   function openEditInvest(inv) {
     setEditInvest(inv);
     setInvestForm({
-      name: inv.name, type: inv.type, investedAmount: String(inv.investedAmount),
+      name: inv.name, type: inv.type,
+      investmentMode: inv.investmentMode || "lumpsum",
+      sipAmount: String(inv.sipAmount || ""), sipDay: String(inv.sipDay || "1"),
+      investedAmount: String(inv.investedAmount),
       currentValue: String(inv.currentValue), units: String(inv.units || ""),
       avgPrice: String(inv.avgPrice || ""), currency: inv.currency || "INR",
       startDate: inv.startDate?.slice(0, 10) || todayISO(),
@@ -1051,27 +1073,60 @@ export default function ExpenseApp({ user }) {
             );
           })()}
 
-          {/* Income / Expense 2-col */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", marginBottom: "1rem" }}>
-            <div style={{ background: "rgba(0,230,118,0.06)", border: "1px solid rgba(0,230,118,0.14)", borderRadius: "var(--radius-lg)", padding: "1rem 1.1rem", cursor: "pointer" }} onClick={() => setActiveTab("transactions")}>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.5rem" }}>
-                <div style={{ width: 28, height: 28, borderRadius: 8, background: "rgba(0,230,118,0.12)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <ArrowUpRight size={15} color="var(--success)" />
+          {/* Income / Expense / Saved — 3 col */}
+          {(() => {
+            const saved = (stats?.totalIncome || 0) - (stats?.totalExpense || 0);
+            return (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.5rem", marginBottom: "0.75rem" }}>
+                <div style={{ background: "rgba(0,230,118,0.06)", border: "1px solid rgba(0,230,118,0.14)", borderRadius: "var(--radius-lg)", padding: "0.75rem 0.85rem", cursor: "pointer" }} onClick={() => setActiveTab("transactions")}>
+                  <div style={{ fontSize: "0.6rem", color: "var(--success)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.35rem" }}>Income</div>
+                  <div style={{ fontSize: "1.1rem", fontWeight: 800, letterSpacing: "-0.03em", color: "var(--success)" }}>{statsLoading ? "—" : fmt(stats?.totalIncome || 0)}</div>
                 </div>
-                <span style={{ fontSize: "0.68rem", color: "var(--success)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>Income</span>
-              </div>
-              <div style={{ fontSize: "1.45rem", fontWeight: 800, letterSpacing: "-0.04em", color: "var(--success)" }}>{statsLoading ? "—" : fmt(stats?.totalIncome || 0)}</div>
-            </div>
-            <div style={{ background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.14)", borderRadius: "var(--radius-lg)", padding: "1rem 1.1rem", cursor: "pointer" }} onClick={() => setActiveTab("transactions")}>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.5rem" }}>
-                <div style={{ width: 28, height: 28, borderRadius: 8, background: "rgba(248,113,113,0.12)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <ArrowDownRight size={15} color="var(--error)" />
+                <div style={{ background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.14)", borderRadius: "var(--radius-lg)", padding: "0.75rem 0.85rem", cursor: "pointer" }} onClick={() => setActiveTab("transactions")}>
+                  <div style={{ fontSize: "0.6rem", color: "var(--error)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.35rem" }}>Expenses</div>
+                  <div style={{ fontSize: "1.1rem", fontWeight: 800, letterSpacing: "-0.03em", color: "var(--error)" }}>{statsLoading ? "—" : fmt(stats?.totalExpense || 0)}</div>
                 </div>
-                <span style={{ fontSize: "0.68rem", color: "var(--error)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>Expenses</span>
+                <div style={{ background: saved >= 0 ? "rgba(59,130,246,0.06)" : "rgba(248,113,113,0.04)", border: `1px solid ${saved >= 0 ? "rgba(59,130,246,0.18)" : "rgba(248,113,113,0.14)"}`, borderRadius: "var(--radius-lg)", padding: "0.75rem 0.85rem" }}>
+                  <div style={{ fontSize: "0.6rem", color: saved >= 0 ? "#60a5fa" : "var(--error)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.35rem" }}>Saved</div>
+                  <div style={{ fontSize: "1.1rem", fontWeight: 800, letterSpacing: "-0.03em", color: saved >= 0 ? "#60a5fa" : "var(--error)" }}>{statsLoading ? "—" : (saved >= 0 ? "" : "−") + fmt(Math.abs(saved))}</div>
+                </div>
               </div>
-              <div style={{ fontSize: "1.45rem", fontWeight: 800, letterSpacing: "-0.04em", color: "var(--error)" }}>{statsLoading ? "—" : fmt(stats?.totalExpense || 0)}</div>
-            </div>
-          </div>
+            );
+          })()}
+
+          {/* Investments card */}
+          {investSummary && investSummary.totalInvested > 0 && (() => {
+            const gain    = investSummary.totalGain || 0;
+            const gainPct = investSummary.gainPct || 0;
+            const isUp    = gain >= 0;
+            return (
+              <div style={{ background: "rgba(108,99,255,0.06)", border: "1px solid rgba(108,99,255,0.18)", borderRadius: "var(--radius-lg)", padding: "0.85rem 1.1rem", marginBottom: "0.75rem", cursor: "pointer" }} onClick={() => setActiveTab("investments")}>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.6rem" }}>
+                  <div style={{ width: 28, height: 28, borderRadius: 8, background: "rgba(108,99,255,0.12)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <TrendingUp size={15} color="var(--accent-light)" />
+                  </div>
+                  <span style={{ fontSize: "0.68rem", color: "var(--accent-light)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>Investments</span>
+                  <span style={{ marginLeft: "auto", fontSize: "0.68rem", fontWeight: 700, color: isUp ? "var(--success)" : "var(--error)", background: isUp ? "rgba(16,185,129,0.1)" : "rgba(248,113,113,0.1)", borderRadius: 20, padding: "0.1rem 0.5rem" }}>
+                    {isUp ? "+" : ""}{gainPct.toFixed(2)}%
+                  </span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.5rem" }}>
+                  <div>
+                    <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Invested</div>
+                    <div style={{ fontSize: "0.95rem", fontWeight: 700 }}>{fmt(investSummary.totalInvested)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Current</div>
+                    <div style={{ fontSize: "0.95rem", fontWeight: 700, color: "var(--accent-light)" }}>{fmt(investSummary.totalCurrent)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Gain / Loss</div>
+                    <div style={{ fontSize: "0.95rem", fontWeight: 700, color: isUp ? "var(--success)" : "var(--error)" }}>{isUp ? "+" : ""}{fmt(gain)}</div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* ── Net Worth ─────────────────────────────────────────────────── */}
           {(() => {
@@ -1317,146 +1372,67 @@ export default function ExpenseApp({ user }) {
             </div>
           )}
 
-          {/* View mode */}
-          <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.25rem" }}>
-            {["day", "month", "year"].map(m => (
-              <button key={m} className={`btn ${viewMode === m ? "" : "btn-ghost"}`} style={{ width: "auto", padding: "0.42rem 0.85rem", fontSize: "0.8rem", marginTop: 0 }} onClick={() => setViewMode(m)}>
-                {m.charAt(0).toUpperCase() + m.slice(1)}
-              </button>
-            ))}
-          </div>
-
-          {/* 6-month Income vs Expense trend */}
-          <div className="chart-card" style={{ marginBottom: "1rem" }}>
-            <div className="chart-title">6-Month Trend</div>
-            <ResponsiveContainer width="100%" height={180}>
-              <BarChart data={stats?.byMonth || []} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                <XAxis dataKey="label" tick={{ fill: "var(--text-muted)", fontSize: 11 }} />
-                <YAxis tick={{ fill: "var(--text-muted)", fontSize: 10 }} />
-                <Tooltip contentStyle={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 8, fontSize: "0.8rem" }} />
-                <Bar dataKey="expense" fill="#f87171" radius={[3, 3, 0, 0]} name="Expense" />
-                <Bar dataKey="income"  fill="#34d399" radius={[3, 3, 0, 0]} name="Income" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Category donut + top merchants side by side */}
-          <div className="two-col-charts">
-            {/* Category donut */}
-            <div className="chart-card">
-              <div className="chart-title">By Category</div>
-              {!statsLoading && stats?.byCategory?.length > 0 ? (
-                <>
-                  <ResponsiveContainer width="100%" height={160}>
-                    <PieChart>
-                      <Pie data={stats.byCategory} dataKey="total" nameKey="category" cx="50%" cy="50%" outerRadius={65} innerRadius={35}>
-                        {stats.byCategory.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
-                      </Pie>
-                      <Tooltip contentStyle={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 8, fontSize: "0.8rem" }} formatter={(v) => fmt(v)} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                  <div className="donut-legend">
-                    {stats.byCategory.slice(0, 5).map((c, i) => (
-                      <div key={c.category} className="donut-legend-item">
-                        <span className="donut-dot" style={{ background: CHART_COLORS[i % CHART_COLORS.length] }} />
-                        <span className="donut-label">{c.category}</span>
-                        <span className="donut-value">{fmt(c.total)}</span>
+          {/* Top 3 spending categories this month */}
+          {!statsLoading && stats?.byCategory?.length > 0 && (
+            <div className="chart-card" style={{ marginBottom: "0.75rem", cursor: "pointer" }} onClick={() => setActiveTab("analytics")}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.6rem" }}>
+                <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Top Spending</div>
+                <span style={{ fontSize: "0.7rem", color: "var(--accent-light)" }}>Full breakdown →</span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
+                {stats.byCategory.slice(0, 3).map((c, i) => {
+                  const pct = stats.totalExpense > 0 ? Math.round((c.total / stats.totalExpense) * 100) : 0;
+                  return (
+                    <div key={c.category}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", marginBottom: "0.18rem" }}>
+                        <span style={{ textTransform: "capitalize", fontWeight: 600 }}>{c.category}</span>
+                        <span style={{ color: "var(--text-muted)" }}>{fmt(c.total)} <span style={{ color: CHART_COLORS[i % CHART_COLORS.length] }}>· {pct}%</span></span>
                       </div>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <div className="empty-state" style={{ padding: "2rem 0.5rem" }}>No data</div>
-              )}
+                      <div style={{ height: 4, background: "var(--border)", borderRadius: 3, overflow: "hidden" }}>
+                        <div style={{ width: `${pct}%`, height: "100%", background: CHART_COLORS[i % CHART_COLORS.length], borderRadius: 3 }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
+          )}
 
-            {/* Top merchants */}
-            <div className="chart-card">
-              <div className="chart-title">Top Merchants</div>
-              {!statsLoading && stats?.topMerchants?.length > 0 ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.55rem" }}>
-                  {stats.topMerchants.map((m, i) => (
-                    <div key={m.merchant} style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-                      <span style={{ width: 18, height: 18, borderRadius: "50%", background: CHART_COLORS[i % CHART_COLORS.length], display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.6rem", color: "#000", fontWeight: 700, flexShrink: 0 }}>{i + 1}</span>
-                      <span style={{ flex: 1, fontSize: "0.82rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.merchant}</span>
-                      <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--error)" }}>{fmt(m.total)}</span>
+          {/* Upcoming loan due dates */}
+          {(() => {
+            const today = new Date();
+            const upcoming = loans
+              .filter(l => l.status === "active" && l.dueDate)
+              .map(l => { const due = new Date(l.dueDate); return { ...l, due, daysLeft: Math.round((due - today) / 86400000) }; })
+              .filter(l => l.daysLeft >= 0)
+              .sort((a, b) => a.daysLeft - b.daysLeft)
+              .slice(0, 3);
+            if (upcoming.length === 0) return null;
+            return (
+              <div className="chart-card" style={{ marginBottom: "0.75rem", cursor: "pointer" }} onClick={() => setActiveTab("loans")}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.6rem" }}>
+                  <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Upcoming Due Dates</div>
+                  <span style={{ fontSize: "0.7rem", color: "var(--accent-light)" }}>View loans →</span>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                  {upcoming.map(l => (
+                    <div key={l._id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <div style={{ fontSize: "0.78rem", fontWeight: 600 }}>{l.party}</div>
+                        <div style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>{l.type === "borrowed" ? "You owe" : "Owed to you"} · {fmt(l.outstanding, l.currency)}</div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: "0.72rem", fontWeight: 700, color: l.daysLeft <= 7 ? "var(--error)" : l.daysLeft <= 30 ? "#ffd43b" : "var(--text-muted)" }}>
+                          {l.daysLeft === 0 ? "Today" : `${l.daysLeft}d`}
+                        </div>
+                        <div style={{ fontSize: "0.62rem", color: "var(--text-muted)" }}>{l.due.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "2-digit" })}</div>
+                      </div>
                     </div>
                   ))}
                 </div>
-              ) : (
-                <div className="empty-state" style={{ padding: "2rem 0.5rem", fontSize: "0.8rem" }}>Add merchant names to transactions to see them here.</div>
-              )}
-            </div>
-          </div>
-
-          {/* Net worth line chart */}
-          <div className="chart-card" style={{ marginTop: "1rem" }}>
-            <div className="chart-title">Net Worth Trend</div>
-            <ResponsiveContainer width="100%" height={150}>
-              <LineChart data={stats?.netWorth || []} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                <XAxis dataKey="label" tick={{ fill: "var(--text-muted)", fontSize: 11 }} />
-                <YAxis tick={{ fill: "var(--text-muted)", fontSize: 10 }} />
-                <Tooltip contentStyle={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 8, fontSize: "0.8rem" }} formatter={(v) => fmt(v)} />
-                <Line type="monotone" dataKey="net" stroke="var(--accent-light)" strokeWidth={2} dot={{ r: 3, fill: "var(--accent)" }} name="Net Worth" />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Day / Month / Year calendar views */}
-          {viewMode === "day" && (
-            <div className="chart-card" style={{ marginTop: "1rem" }}>
-              <div className="chart-title">Daily — {new Date(selectedYear, selectedMonth - 1, 1).toLocaleString("default", { month: "long", year: "numeric" })}</div>
-              {statsLoading ? <div style={{ textAlign: "center", padding: "2rem", color: "var(--text-muted)" }}>Loading…</div> : (
-                <>
-                  <div className="calendar-weekdays">{["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => <div key={d} className="calendar-weekday">{d}</div>)}</div>
-                  <div className="calendar-grid">
-                    {Array.from({ length: (new Date(selectedYear, selectedMonth - 1, 1).getDay() + 6) % 7 }).map((_, i) => (
-                      <div key={`e${i}`} className="calendar-day empty" />
-                    ))}
-                    {stats?.calendarDays?.map(day => (
-                      <div key={day.day} className={`calendar-day ${day.total > 0 ? "has-expenses" : ""}`}>
-                        <div className="calendar-day-number">{day.day}</div>
-                        {day.total > 0 && <div className="calendar-day-amount">{fmt(day.total)}</div>}
-                        {day.count > 0 && <div className="calendar-day-count">{day.count} tx</div>}
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-
-          {viewMode === "month" && (
-            <div className="chart-card" style={{ marginTop: "1rem" }}>
-              <div className="chart-title">{selectedYear} Monthly Overview</div>
-              <div className="year-months-grid">
-                {stats?.yearMonths?.map(m => (
-                  <div key={m.month} className={`year-month-card ${m.month === selectedMonth ? "selected" : ""}`} onClick={() => setSelectedMonth(m.month)}>
-                    <div className="year-month-name">{m.name}</div>
-                    <div className="year-month-total">{fmt(m.total)}</div>
-                    <div className="year-month-count">{m.count} tx</div>
-                  </div>
-                ))}
               </div>
-            </div>
-          )}
-
-          {viewMode === "year" && (
-            <div className="chart-card" style={{ marginTop: "1rem" }}>
-              <div className="chart-title">Last 5 Years</div>
-              <div className="year-months-grid">
-                {stats?.yearTotals?.map(y => (
-                  <div key={y.year} className="year-month-card">
-                    <div className="year-month-name">{y.year}</div>
-                    <div className="year-month-total">{fmt(y.total)}</div>
-                    <div className="year-month-count">{y.count} tx</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       )}
 
@@ -1927,21 +1903,49 @@ export default function ExpenseApp({ user }) {
         <div className="tab-content">
           {/* Summary bar */}
           {!loansLoading && loans.length > 0 && (() => {
-            const totalBorrowed = loans.filter(l => l.type === "borrowed" && l.status === "active").reduce((s, l) => s + loanRemainingPayable(l), 0);
-            const totalLent     = loans.filter(l => l.type === "lent"     && l.status === "active").reduce((s, l) => s + loanRemainingPayable(l), 0);
+            const borrowed = loans.filter(l => l.type === "borrowed" && l.status === "active");
+            const lent     = loans.filter(l => l.type === "lent"     && l.status === "active");
+            const calcInterest = l => {
+              const P = l.principal, R = l.interestRate, N = l.tenureMonths;
+              if (R > 0 && N > 0 && l.interestType !== "none") {
+                if (l.interestType === "simple") return P * R * (N / 12) / 100 * (l.outstanding / P);
+                const r = R / 100 / 12;
+                const emi = r > 0 ? P * r * Math.pow(1+r,N) / (Math.pow(1+r,N)-1) : P/N;
+                return Math.max(0, emi * N - P) * (l.outstanding / P);
+              }
+              return 0;
+            };
+            const borrowedPrincipal  = borrowed.reduce((s, l) => s + l.outstanding, 0);
+            const borrowedInterest   = borrowed.reduce((s, l) => s + calcInterest(l), 0);
+            const borrowedTotal      = borrowed.reduce((s, l) => s + loanRemainingPayable(l), 0);
+            const lentPrincipal      = lent.reduce((s, l) => s + l.outstanding, 0);
+            const lentInterest       = lent.reduce((s, l) => s + calcInterest(l), 0);
+            const lentTotal          = lent.reduce((s, l) => s + loanRemainingPayable(l), 0);
+            const row = (label, val, color) => (
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", marginBottom: "0.2rem" }}>
+                <span style={{ color: "var(--text-muted)" }}>{label}</span>
+                <span style={{ fontWeight: 600, color }}>{fmt(val)}</span>
+              </div>
+            );
             return (
-              <div className="stat-grid" style={{ marginBottom: "1.25rem" }}>
-                <div className="stat-card">
-                  <div className="stat-card-label">You Owe</div>
-                  <div className="stat-card-value c-expense">{fmt(totalBorrowed)}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.6rem", marginBottom: "1.25rem" }}>
+                <div className="stat-card" style={{ padding: "0.75rem" }}>
+                  <div className="stat-card-label" style={{ marginBottom: "0.5rem" }}>You Owe</div>
+                  {row("Principal", borrowedPrincipal, "var(--text)")}
+                  {borrowedInterest > 0 && row("Interest", borrowedInterest, "var(--error)")}
+                  <div style={{ borderTop: "1px solid var(--border)", marginTop: "0.35rem", paddingTop: "0.35rem", display: "flex", justifyContent: "space-between", fontSize: "0.82rem" }}>
+                    <span style={{ fontWeight: 700 }}>Total</span>
+                    <span style={{ fontWeight: 800, color: "var(--error)" }}>{fmt(borrowedTotal)}</span>
+                  </div>
                 </div>
-                <div className="stat-card">
-                  <div className="stat-card-label">Owed to You</div>
-                  <div className="stat-card-value c-income">{fmt(totalLent)}</div>
-                </div>
-                <div className="stat-card">
-                  <div className="stat-card-label">Net Position</div>
-                  <div className={`stat-card-value ${totalLent - totalBorrowed >= 0 ? "c-pos" : "c-neg"}`}>{fmt(totalLent - totalBorrowed)}</div>
+                <div className="stat-card" style={{ padding: "0.75rem" }}>
+                  <div className="stat-card-label" style={{ marginBottom: "0.5rem" }}>Owed to You</div>
+                  {row("Principal", lentPrincipal, "var(--text)")}
+                  {lentInterest > 0 && row("Interest", lentInterest, "var(--success)")}
+                  <div style={{ borderTop: "1px solid var(--border)", marginTop: "0.35rem", paddingTop: "0.35rem", display: "flex", justifyContent: "space-between", fontSize: "0.82rem" }}>
+                    <span style={{ fontWeight: 700 }}>Total</span>
+                    <span style={{ fontWeight: 800, color: "var(--success)" }}>{fmt(lentTotal)}</span>
+                  </div>
                 </div>
               </div>
             );
@@ -1975,7 +1979,10 @@ export default function ExpenseApp({ user }) {
                         </div>
                         <div style={{ minWidth: 0 }}>
                           <div style={{ fontWeight: 600, fontSize: "0.875rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.party}</div>
-                          <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", textTransform: "capitalize" }}>{l.purpose}{l.interestRate > 0 ? ` · ${l.interestRate}% p.a.` : ""}</div>
+                          <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", textTransform: "capitalize" }}>
+                            {l.purpose}{l.interestRate > 0 ? ` · ${l.interestRate}% p.a.` : ""}
+                            {l.loanNumber && <span style={{ marginLeft: "0.4rem", textTransform: "none", background: "var(--surface2)", borderRadius: 4, padding: "0.05rem 0.35rem", fontWeight: 600 }}>#{l.loanNumber}</span>}
+                          </div>
                         </div>
                       </div>
                       {/* Right: action buttons */}
@@ -2051,6 +2058,7 @@ export default function ExpenseApp({ user }) {
                       {daysLeft !== null ? (
                         <span style={{ color: overdue ? "var(--error)" : daysLeft < 15 ? "#ffd43b" : "var(--text-muted)" }}>
                           {overdue ? `${Math.abs(daysLeft)}d overdue` : `Due in ${daysLeft}d`}
+                          {" · "}{new Date(l.dueDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "2-digit" })}
                         </span>
                       ) : <span />}
                       {l.payments?.length > 0 && (
@@ -2420,11 +2428,32 @@ export default function ExpenseApp({ user }) {
                 <div className="stat-card-value">{fmt(Math.round((analytics.yearMonths?.reduce((s, m) => s + m.total, 0) || 0) / 12))}</div>
               </div>
               {analytics.totalIncome > 0 && (
-                <div className="stat-card" style={{ gridColumn: "1 / -1" }}>
-                  <div className="stat-card-label">Savings Rate (this month)</div>
+                <div className="stat-card">
+                  <div className="stat-card-label">Cash Savings Rate</div>
                   <div className={`stat-card-value ${analytics.net >= 0 ? "c-pos" : "c-neg"}`}>
-                    {analytics.totalIncome > 0 ? `${Math.round((analytics.net / analytics.totalIncome) * 100)}%` : "—"}
-                    <span style={{ fontSize: "0.72rem", fontWeight: 400, marginLeft: "0.5rem", color: "var(--text-muted)" }}>({fmt(analytics.net)} saved)</span>
+                    {`${Math.round((analytics.net / analytics.totalIncome) * 100)}%`}
+                    <span style={{ fontSize: "0.7rem", fontWeight: 400, marginLeft: "0.4rem", color: "var(--text-muted)" }}>{fmt(analytics.net)}</span>
+                  </div>
+                </div>
+              )}
+              {investSummary && investSummary.totalInvested > 0 && (
+                <div className="stat-card">
+                  <div className="stat-card-label">Portfolio Value</div>
+                  <div className="stat-card-value" style={{ color: "var(--accent-light)" }}>{fmt(investSummary.totalCurrent)}</div>
+                </div>
+              )}
+              {investSummary && investSummary.totalInvested > 0 && (
+                <div className="stat-card">
+                  <div className="stat-card-label">Total Invested</div>
+                  <div className="stat-card-value">{fmt(investSummary.totalInvested)}</div>
+                </div>
+              )}
+              {investSummary && investSummary.totalInvested > 0 && (
+                <div className="stat-card">
+                  <div className="stat-card-label">Portfolio Gain</div>
+                  <div className={`stat-card-value ${investSummary.totalGain >= 0 ? "c-pos" : "c-neg"}`}>
+                    {investSummary.totalGain >= 0 ? "+" : ""}{fmt(investSummary.totalGain)}
+                    <span style={{ fontSize: "0.7rem", fontWeight: 400, marginLeft: "0.4rem", color: "var(--text-muted)" }}>({investSummary.gainPct >= 0 ? "+" : ""}{investSummary.gainPct?.toFixed(1)}%)</span>
                   </div>
                 </div>
               )}
@@ -2450,7 +2479,7 @@ export default function ExpenseApp({ user }) {
 
           {/* Monthly savings trend */}
           <div className="chart-card" style={{ marginBottom: "1rem" }}>
-            <div className="chart-title">Monthly Savings Trend</div>
+            <div className="chart-title">Monthly Cash Savings (Income − Expense)</div>
             {analyticsLoading ? <div style={{ textAlign: "center", padding: "2rem", color: "var(--text-muted)" }}>Loading…</div> : (
               <ResponsiveContainer width="100%" height={150}>
                 <LineChart data={(analytics?.byMonth || []).map(m => ({ label: m.label, saved: m.income - m.expense }))} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
@@ -2463,6 +2492,47 @@ export default function ExpenseApp({ user }) {
               </ResponsiveContainer>
             )}
           </div>
+
+          {/* Portfolio breakdown — invested vs current by type */}
+          {investSummary && investSummary.totalInvested > 0 && investSummary.byType && Object.keys(investSummary.byType).length > 0 && (
+            <div className="chart-card" style={{ marginBottom: "1rem" }}>
+              <div className="chart-title">Portfolio — Invested vs Current Value</div>
+              <ResponsiveContainer width="100%" height={180}>
+                <BarChart
+                  data={Object.entries(investSummary.byType).map(([type, v]) => ({
+                    name: type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
+                    invested: v.invested,
+                    current:  v.current,
+                  }))}
+                  margin={{ top: 4, right: 4, bottom: 0, left: -20 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                  <XAxis dataKey="name" tick={{ fill: "var(--text-muted)", fontSize: 10 }} />
+                  <YAxis tick={{ fill: "var(--text-muted)", fontSize: 10 }} />
+                  <Tooltip contentStyle={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 8, fontSize: "0.8rem" }} formatter={v => fmt(v)} />
+                  <Bar dataKey="invested" fill="#6c63ff" radius={[3, 3, 0, 0]} name="Invested" />
+                  <Bar dataKey="current"  fill="#34d399" radius={[3, 3, 0, 0]} name="Current" />
+                </BarChart>
+              </ResponsiveContainer>
+              {/* per-type gain rows */}
+              <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                {Object.entries(investSummary.byType).map(([type, v]) => {
+                  const gain    = v.current - v.invested;
+                  const gainPct = v.invested > 0 ? (gain / v.invested) * 100 : 0;
+                  return (
+                    <div key={type} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.75rem" }}>
+                      <span style={{ flex: 1, textTransform: "capitalize" }}>{type.replace(/_/g, " ")}</span>
+                      <span style={{ color: "var(--text-muted)" }}>{fmt(v.invested)}</span>
+                      <span style={{ color: "var(--accent-light)", fontWeight: 600 }}>→ {fmt(v.current)}</span>
+                      <span style={{ fontWeight: 700, color: gain >= 0 ? "var(--success)" : "var(--error)", minWidth: 60, textAlign: "right" }}>
+                        {gain >= 0 ? "+" : ""}{gainPct.toFixed(1)}%
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Year monthly breakdown table */}
           <div className="chart-card" style={{ marginBottom: "1rem" }}>
@@ -2504,7 +2574,7 @@ export default function ExpenseApp({ user }) {
           </div>
 
           {/* 5-year totals */}
-          <div className="chart-card">
+          <div className="chart-card" style={{ marginBottom: "1rem" }}>
             <div className="chart-title">5-Year Overview</div>
             {analyticsLoading ? <div style={{ textAlign: "center", padding: "2rem", color: "var(--text-muted)" }}>Loading…</div> : (
               <ResponsiveContainer width="100%" height={150}>
@@ -2518,6 +2588,100 @@ export default function ExpenseApp({ user }) {
               </ResponsiveContainer>
             )}
           </div>
+
+          {/* Net worth trend (uses stats loaded from overview) */}
+          {stats?.netWorth?.length > 0 && (
+            <div className="chart-card" style={{ marginBottom: "1rem" }}>
+              <div className="chart-title">Net Worth Trend</div>
+              <ResponsiveContainer width="100%" height={150}>
+                <LineChart data={stats.netWorth} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                  <XAxis dataKey="label" tick={{ fill: "var(--text-muted)", fontSize: 11 }} />
+                  <YAxis tick={{ fill: "var(--text-muted)", fontSize: 10 }} />
+                  <Tooltip contentStyle={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 8, fontSize: "0.8rem" }} formatter={(v) => fmt(v)} />
+                  <Line type="monotone" dataKey="net" stroke="var(--accent-light)" strokeWidth={2} dot={{ r: 3, fill: "var(--accent)" }} name="Net Worth" />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* Top merchants (uses stats loaded from overview) */}
+          {stats?.topMerchants?.length > 0 && (
+            <div className="chart-card" style={{ marginBottom: "1rem" }}>
+              <div className="chart-title">Top Merchants (this month)</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.55rem" }}>
+                {stats.topMerchants.map((m, i) => (
+                  <div key={m.merchant} style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                    <span style={{ width: 18, height: 18, borderRadius: "50%", background: CHART_COLORS[i % CHART_COLORS.length], display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.6rem", color: "#000", fontWeight: 700, flexShrink: 0 }}>{i + 1}</span>
+                    <span style={{ flex: 1, fontSize: "0.82rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.merchant}</span>
+                    <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--error)" }}>{fmt(m.total)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Day / Month / Year view switcher */}
+          <div style={{ display: "flex", gap: "0.5rem", margin: "0.5rem 0 0.75rem" }}>
+            {["day", "month", "year"].map(m => (
+              <button key={m} className={`btn ${viewMode === m ? "" : "btn-ghost"}`} style={{ width: "auto", padding: "0.42rem 0.85rem", fontSize: "0.8rem", marginTop: 0 }} onClick={() => setViewMode(m)}>
+                {m.charAt(0).toUpperCase() + m.slice(1)}
+              </button>
+            ))}
+          </div>
+
+          {viewMode === "day" && (
+            <div className="chart-card">
+              <div className="chart-title">Daily — {new Date(selectedYear, selectedMonth - 1, 1).toLocaleString("default", { month: "long", year: "numeric" })}</div>
+              {statsLoading ? <div style={{ textAlign: "center", padding: "2rem", color: "var(--text-muted)" }}>Loading…</div> : (
+                <>
+                  <div className="calendar-weekdays">{["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => <div key={d} className="calendar-weekday">{d}</div>)}</div>
+                  <div className="calendar-grid">
+                    {Array.from({ length: (new Date(selectedYear, selectedMonth - 1, 1).getDay() + 6) % 7 }).map((_, i) => (
+                      <div key={`e${i}`} className="calendar-day empty" />
+                    ))}
+                    {stats?.calendarDays?.map(day => (
+                      <div key={day.day} className={`calendar-day ${day.total > 0 ? "has-expenses" : ""}`}>
+                        <div className="calendar-day-number">{day.day}</div>
+                        {day.total > 0 && <div className="calendar-day-amount">{fmt(day.total)}</div>}
+                        {day.count > 0 && <div className="calendar-day-count">{day.count} tx</div>}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {viewMode === "month" && (
+            <div className="chart-card">
+              <div className="chart-title">{selectedYear} Monthly Overview</div>
+              <div className="year-months-grid">
+                {stats?.yearMonths?.map(m => (
+                  <div key={m.month} className={`year-month-card ${m.month === selectedMonth ? "selected" : ""}`} onClick={() => setSelectedMonth(m.month)}>
+                    <div className="year-month-name">{m.name}</div>
+                    <div className="year-month-total">{fmt(m.total)}</div>
+                    <div className="year-month-count">{m.count} tx</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {viewMode === "year" && (
+            <div className="chart-card">
+              <div className="chart-title">Last 5 Years (spending)</div>
+              <div className="year-months-grid">
+                {stats?.yearTotals?.map(y => (
+                  <div key={y.year} className="year-month-card">
+                    <div className="year-month-name">{y.year}</div>
+                    <div className="year-month-total">{fmt(y.total)}</div>
+                    <div className="year-month-count">{y.count} tx</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -2821,9 +2985,15 @@ export default function ExpenseApp({ user }) {
               <button className={`type-btn ${loanForm.type === "lent"     ? "active-income"  : ""}`} onClick={() => setLoanForm(f => ({ ...f, type: "lent" }))}>I Lent</button>
             </div>
 
-            <div className="form-group">
-              <label className="form-label">{loanForm.type === "borrowed" ? "Lender Name" : "Borrower Name"}</label>
-              <input className="form-input" placeholder="e.g. Bank, Friend's name" value={loanForm.party} onChange={e => setLoanForm(f => ({ ...f, party: e.target.value }))} autoFocus />
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <div className="form-group" style={{ flex: 2 }}>
+                <label className="form-label">{loanForm.type === "borrowed" ? "Lender Name" : "Borrower Name"}</label>
+                <input className="form-input" placeholder="e.g. Bank, Friend's name" value={loanForm.party} onChange={e => setLoanForm(f => ({ ...f, party: e.target.value }))} autoFocus />
+              </div>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label className="form-label">Loan / A/C No. <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)" }}>(opt)</span></label>
+                <input className="form-input" placeholder="e.g. LN123456" value={loanForm.loanNumber} onChange={e => setLoanForm(f => ({ ...f, loanNumber: e.target.value }))} />
+              </div>
             </div>
 
             <div style={{ display: "flex", gap: "0.5rem" }}>
@@ -2984,6 +3154,13 @@ export default function ExpenseApp({ user }) {
               <label className="form-label">Note <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span></label>
               <input className="form-input" placeholder="e.g. EMI #3" value={paymentNote} onChange={e => setPaymentNote(e.target.value)} />
             </div>
+            <label style={{ display: "flex", alignItems: "center", gap: "0.55rem", cursor: "pointer", marginBottom: "1rem", padding: "0.6rem 0.75rem", background: paymentRecordTx ? "rgba(108,99,255,0.07)" : "var(--surface2)", border: `1px solid ${paymentRecordTx ? "rgba(108,99,255,0.25)" : "var(--border)"}`, borderRadius: "var(--radius)", transition: "all 0.15s" }}>
+              <input type="checkbox" checked={paymentRecordTx} onChange={e => setPaymentRecordTx(e.target.checked)} style={{ width: 15, height: 15, accentColor: "var(--accent)", cursor: "pointer" }} />
+              <div>
+                <div style={{ fontSize: "0.8rem", fontWeight: 600 }}>Record as expense transaction</div>
+                <div style={{ fontSize: "0.67rem", color: "var(--text-muted)", marginTop: "0.1rem" }}>Adds an "EMI / Loan" entry to your transactions for this month</div>
+              </div>
+            </label>
             <button className="btn" onClick={savePayment} disabled={paymentSaving || !paymentAmount}>{paymentSaving ? "Saving…" : "Record Payment"}</button>
           </div>
         </div>

@@ -1,5 +1,6 @@
 import connectDB from '../../../lib/mongodb';
 import Investment from '../../../models/Investment';
+import Expense from '../../../models/Expense';
 import { getAuthUser } from '../../../lib/auth';
 
 export default async function handler(req, res) {
@@ -14,9 +15,12 @@ export default async function handler(req, res) {
   if (investment.userId.toString() !== authUser.userId) return res.status(403).json({ error: 'Forbidden.' });
 
   if (req.method === 'PUT') {
-    const { name, type, investedAmount, currentValue, units, avgPrice, currency, startDate, maturityDate, notes, isActive, schemeCode, stockSymbol, stockExchange, lastPriceAt } = req.body;
+    const { name, type, investedAmount, currentValue, units, avgPrice, currency, startDate, maturityDate, notes, isActive, schemeCode, stockSymbol, stockExchange, lastPriceAt, investmentMode, sipAmount, sipDay } = req.body;
     if (name           !== undefined) investment.name           = name;
     if (type           !== undefined) investment.type           = type;
+    if (investmentMode !== undefined) investment.investmentMode = investmentMode;
+    if (sipAmount      !== undefined) investment.sipAmount      = Number(sipAmount);
+    if (sipDay         !== undefined) investment.sipDay         = Number(sipDay);
     if (investedAmount !== undefined) investment.investedAmount = Number(investedAmount);
     if (currentValue   !== undefined) investment.currentValue   = Number(currentValue);
     if (units          !== undefined) investment.units          = Number(units);
@@ -31,6 +35,33 @@ export default async function handler(req, res) {
     if (stockExchange  !== undefined) investment.stockExchange  = stockExchange;
     if (lastPriceAt    !== undefined) investment.lastPriceAt    = lastPriceAt ? new Date(lastPriceAt) : undefined;
     await investment.save();
+    return res.status(200).json({ investment });
+  }
+
+  // POST — log a contribution (lumpsum top-up or SIP instalment)
+  if (req.method === 'POST') {
+    const { amount, date, note, recordTransaction } = req.body;
+    if (!amount || Number(amount) <= 0) return res.status(400).json({ error: 'Amount must be > 0.' });
+
+    const paid = Number(amount);
+    const contribDate = date ? new Date(date) : new Date();
+    investment.contributions.push({ amount: paid, date: contribDate, note: note || '' });
+    investment.investedAmount += paid;
+    await investment.save();
+
+    if (recordTransaction) {
+      const isSip = investment.investmentMode === 'sip';
+      await Expense.create({
+        userId:      investment.userId,
+        type:        'expense',
+        category:    'investment',
+        description: `${isSip ? 'SIP' : 'Investment'} – ${investment.name}`,
+        amount:      paid,
+        date:        contribDate,
+        currency:    investment.currency || 'INR',
+      });
+    }
+
     return res.status(200).json({ investment });
   }
 

@@ -31,13 +31,16 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'POST') {
-    const { name, type, investedAmount, currentValue, units, avgPrice, currency, startDate, maturityDate, notes, schemeCode, stockSymbol, stockExchange } = req.body;
+    const { name, type, investedAmount, currentValue, units, avgPrice, currency, startDate, maturityDate, notes, schemeCode, stockSymbol, stockExchange, investmentMode, sipAmount, sipDay } = req.body;
     if (!name || investedAmount === undefined) return res.status(400).json({ error: 'name and investedAmount are required.' });
 
     const investment = await Investment.create({
       userId,
       name,
       type:           type || 'mutual_fund',
+      investmentMode: investmentMode || 'lumpsum',
+      sipAmount:      Number(sipAmount || 0),
+      sipDay:         Number(sipDay || 1),
       investedAmount: Number(investedAmount),
       currentValue:   Number(currentValue ?? investedAmount),
       units:          Number(units || 0),

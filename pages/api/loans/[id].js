@@ -1,5 +1,6 @@
 import connectDB from '../../../lib/mongodb';
 import Loan from '../../../models/Loan';
+import Expense from '../../../models/Expense';
 import { getAuthUser } from '../../../lib/auth';
 
 export default async function handler(req, res) {
@@ -14,9 +15,10 @@ export default async function handler(req, res) {
   if (loan.userId.toString() !== authUser.userId) return res.status(403).json({ error: 'Forbidden.' });
 
   if (req.method === 'PUT') {
-    const { type, party, principal, outstanding, interestRate, interestType, emiAmount, tenureMonths, emiDay, purpose, currency, startDate, dueDate, notes, status } = req.body;
+    const { type, party, loanNumber, principal, outstanding, interestRate, interestType, emiAmount, tenureMonths, emiDay, purpose, currency, startDate, dueDate, notes, status } = req.body;
     if (type         !== undefined) loan.type         = type;
     if (party        !== undefined) loan.party        = party;
+    if (loanNumber   !== undefined) loan.loanNumber   = loanNumber;
     if (principal    !== undefined) loan.principal    = Number(principal);
     if (outstanding  !== undefined) loan.outstanding  = Number(outstanding);
     if (interestRate !== undefined) loan.interestRate = Number(interestRate);
@@ -34,16 +36,31 @@ export default async function handler(req, res) {
     return res.status(200).json({ loan });
   }
 
-  // POST to /api/loans/[id] with action=payment logs a repayment
+  // POST to /api/loans/[id] logs a repayment and optionally creates an expense transaction
   if (req.method === 'POST') {
-    const { amount, date, note } = req.body;
+    const { amount, date, note, recordTransaction } = req.body;
     if (!amount || Number(amount) <= 0) return res.status(400).json({ error: 'Payment amount must be > 0.' });
 
     const paid = Number(amount);
-    loan.payments.push({ amount: paid, date: date ? new Date(date) : new Date(), note: note || '' });
+    const paymentDate = date ? new Date(date) : new Date();
+    loan.payments.push({ amount: paid, date: paymentDate, note: note || '' });
     loan.outstanding = Math.max(0, loan.outstanding - paid);
     if (loan.outstanding === 0) loan.status = 'closed';
     await loan.save();
+
+    if (recordTransaction) {
+      const label = loan.loanNumber ? `${loan.party} (#${loan.loanNumber})` : loan.party;
+      await Expense.create({
+        userId:      loan.userId,
+        type:        'expense',
+        category:    'emi',
+        description: `EMI – ${label}`,
+        amount:      paid,
+        date:        paymentDate,
+        currency:    loan.currency || 'INR',
+      });
+    }
+
     return res.status(200).json({ loan });
   }
 

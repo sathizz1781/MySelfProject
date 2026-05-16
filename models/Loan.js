@@ -10,6 +10,7 @@ const loanSchema = new mongoose.Schema({
   userId:       { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   type:         { type: String, enum: ['borrowed', 'lent'], required: true },
   party:        { type: String, required: true },        // lender or borrower name
+  loanNumber:   { type: String, default: '' },
   principal:    { type: Number, required: true },        // original loan amount
   outstanding:  { type: Number, required: true },        // remaining balance
   interestRate: { type: Number, default: 0 },            // annual %
