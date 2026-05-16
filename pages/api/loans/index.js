@@ -16,7 +16,7 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'POST') {
-    const { type, party, principal, interestRate, interestType, emiAmount, purpose, currency, startDate, dueDate, notes } = req.body;
+    const { type, party, principal, outstanding: outstandingBody, interestRate, interestType, emiAmount, purpose, currency, startDate, dueDate, notes, tenureMonths, emiDay } = req.body;
     if (!type || !party || !principal) return res.status(400).json({ error: 'type, party, and principal are required.' });
     if (Number(principal) <= 0) return res.status(400).json({ error: 'Principal must be greater than 0.' });
 
@@ -25,10 +25,12 @@ export default async function handler(req, res) {
       type,
       party,
       principal:    Number(principal),
-      outstanding:  Number(principal),
+      outstanding:  outstandingBody !== undefined ? Number(outstandingBody) : Number(principal),
       interestRate: Number(interestRate || 0),
       interestType: interestType || 'none',
       emiAmount:    Number(emiAmount || 0),
+      tenureMonths: Number(tenureMonths || 0),
+      emiDay:       Number(emiDay || 1),
       purpose:      purpose || 'personal',
       currency:     currency || 'INR',
       startDate:    startDate ? new Date(startDate) : new Date(),

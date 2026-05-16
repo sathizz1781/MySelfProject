@@ -15,7 +15,9 @@ const loanSchema = new mongoose.Schema({
   interestRate: { type: Number, default: 0 },            // annual %
   interestType: { type: String, enum: ['none', 'simple', 'compound'], default: 'none' },
   emiAmount:    { type: Number, default: 0 },
-  purpose:      { type: String, enum: ['home', 'car', 'personal', 'education', 'business', 'other'], default: 'personal' },
+  purpose:      { type: String, enum: ['home', 'car', 'personal', 'education', 'business', 'gold', 'other'], default: 'personal' },
+  tenureMonths: { type: Number, default: 0 },
+  emiDay:       { type: Number, default: 1, min: 1, max: 28 }, // day of month EMI is due
   currency:     { type: String, default: 'INR' },
   startDate:    { type: Date, default: Date.now },
   dueDate:      { type: Date },

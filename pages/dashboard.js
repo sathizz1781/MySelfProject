@@ -9,6 +9,7 @@ import {
   Target,
   Calendar,
   BarChart2,
+  Calculator,
 } from "lucide-react";
 import { getAuthUser } from "../lib/auth";
 import connectDB from "../lib/mongodb";
@@ -77,6 +78,15 @@ const APPS = [
     color: "#a78bfa",
     description: "Monthly financial reports",
     href: "/apps/reports",
+    live: true,
+  },
+  {
+    key: "calculators",
+    name: "Calculators",
+    icon: Calculator,
+    color: "#06b6d4",
+    description: "EMI, SIP, FD & more",
+    href: "/apps/calculators",
     live: true,
   },
 ];

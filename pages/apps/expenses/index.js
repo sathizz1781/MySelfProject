@@ -8,9 +8,11 @@ import {
   UtensilsCrossed, ShoppingCart, Car, Film, Pill, Lightbulb,
   Home, Plane, BookOpen, Package, Briefcase, Laptop, TrendingUp,
   Gift, DollarSign, Users, Package2, Target, RefreshCw, Search,
-  Download, Upload, Copy, X, ChevronLeft, ChevronRight,
+  Download, Upload, Copy, X, ChevronLeft, ChevronRight, ChevronDown,
   CreditCard, TrendingDown, PiggyBank, BarChart2, Landmark,
   MoreHorizontal, Activity, ArrowUpRight, ArrowDownRight, Layers,
+  Pencil, Trash2, CheckCircle2, RotateCcw, CalendarDays, Check,
+  Pause, Play, PlusCircle, ListOrdered,
 } from "lucide-react";
 import { getAuthUser } from "../../../lib/auth";
 import {
@@ -43,6 +45,31 @@ const fmt = (n, currency = "INR") =>
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 function currentMonth() { return new Date().toISOString().slice(0, 7); }
 
+// Total remaining cash still to be paid for a loan (principal balance + future interest)
+function loanRemainingPayable(l) {
+  const outstanding = l.outstanding || 0;
+  if (l.interestRate > 0 && l.tenureMonths > 0 && l.interestType !== "none") {
+    const P = l.principal, R = l.interestRate, N = l.tenureMonths;
+    if (l.interestType === "simple") {
+      // Proportional remaining interest based on outstanding fraction
+      const totalInterest = P * R * (N / 12) / 100;
+      const remainingInterest = outstanding > 0 ? totalInterest * (outstanding / P) : 0;
+      return outstanding + remainingInterest;
+    } else {
+      // Compound: remaining EMIs × EMI amount
+      const r = R / 100 / 12;
+      const emi = r > 0 ? P * r * Math.pow(1 + r, N) / (Math.pow(1 + r, N) - 1) : P / N;
+      // Remaining months from amortization: find when balance hits ~outstanding
+      const paidEMIs = l.emiAmount > 0
+        ? Math.round((P - outstanding) / l.emiAmount)
+        : Math.round((1 - outstanding / P) * N);
+      const remaining = Math.max(0, N - paidEMIs);
+      return remaining > 0 ? emi * remaining : outstanding;
+    }
+  }
+  return outstanding;
+}
+
 function formatDate(iso) {
   return new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
 }
@@ -63,8 +90,33 @@ function initRecurringForm() {
   return { amount: "", type: "expense", category: "food", description: "", merchant: "", currency: "INR", frequency: "monthly", startDate: todayISO() };
 }
 
+function calcAmortization(principal, annualRate, tenureMonths, interestType) {
+  const N = tenureMonths, P = principal, rows = [];
+  if (interestType === "simple") {
+    const totalInterest = P * annualRate * (N / 12) / 100;
+    const emi = (P + totalInterest) / N;
+    const mi = totalInterest / N, mp = P / N;
+    let bal = P;
+    for (let i = 1; i <= N; i++) {
+      bal = Math.max(0, bal - mp);
+      rows.push({ month: i, emi, principal: mp, interest: mi, balance: bal });
+    }
+  } else {
+    const r = annualRate / 100 / 12;
+    const emi = r > 0 ? P * r * Math.pow(1 + r, N) / (Math.pow(1 + r, N) - 1) : P / N;
+    let bal = P;
+    for (let i = 1; i <= N; i++) {
+      const interest = bal * r;
+      const principal = Math.min(emi - interest, bal);
+      bal = Math.max(0, bal - principal);
+      rows.push({ month: i, emi, principal, interest, balance: bal });
+    }
+  }
+  return rows;
+}
+
 function initLoanForm() {
-  return { type: "borrowed", party: "", principal: "", alreadyPaid: "0", interestRate: "0", interestType: "none", emiAmount: "", purpose: "personal", currency: "INR", startDate: todayISO(), dueDate: "", notes: "" };
+  return { type: "borrowed", party: "", principal: "", alreadyPaid: "0", interestRate: "0", interestType: "none", tenureMonths: "", emiDay: "1", emiAmount: "", purpose: "personal", currency: "INR", startDate: todayISO(), dueDate: "", notes: "" };
 }
 
 function initChitForm() {
@@ -88,7 +140,7 @@ const INVEST_TYPES = [
   { key: "other",        label: "Other",          color: "#6b7280" },
 ];
 
-const LOAN_PURPOSES = ["home", "car", "personal", "education", "business", "other"];
+const LOAN_PURPOSES = ["home", "car", "personal", "education", "business", "gold", "other"];
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function ExpenseApp() {
@@ -176,11 +228,13 @@ export default function ExpenseApp() {
   const [paymentNote, setPaymentNote] = useState("");
   const [paymentDate, setPaymentDate] = useState(todayISO());
   const [paymentSaving, setPaymentSaving] = useState(false);
+  const [showScheduleModal, setShowScheduleModal] = useState(null);
 
   // Investments
   const [investments, setInvestments] = useState([]);
   const [investSummary, setInvestSummary] = useState(null);
   const [investLoading, setInvestLoading] = useState(false);
+  const [nwExpanded, setNwExpanded] = useState({ assets: false, liabilities: false });
   const [showInvestModal, setShowInvestModal] = useState(false);
   const [editInvest, setEditInvest] = useState(null);
   const [investForm, setInvestForm] = useState(initInvestForm);
@@ -198,6 +252,7 @@ export default function ExpenseApp() {
   const mfTimer = useRef(null);
   // Stock price fetch
   const [stockFetching, setStockFetching] = useState(false);
+  const [goldFetching, setGoldFetching] = useState(false);
 
   // XLSX import
   const xlsxInputRef = useRef(null);
@@ -426,7 +481,7 @@ export default function ExpenseApp() {
       type: l.type, party: l.party, principal: String(l.principal),
       alreadyPaid: String(paid),
       interestRate: String(l.interestRate || 0), interestType: l.interestType || "none",
-      emiAmount: String(l.emiAmount || ""), purpose: l.purpose || "personal",
+      tenureMonths: String(l.tenureMonths || ""), emiDay: String(l.emiDay || "1"), emiAmount: String(l.emiAmount || ""), purpose: l.purpose || "personal",
       currency: l.currency || "INR", startDate: l.startDate?.slice(0, 10) || todayISO(),
       dueDate: l.dueDate?.slice(0, 10) || "", notes: l.notes || "",
     });
@@ -442,7 +497,7 @@ export default function ExpenseApp() {
     try {
       const url = editLoan ? `/api/loans/${editLoan._id}` : "/api/loans";
       const method = editLoan ? "PUT" : "POST";
-      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...loanForm, principal, outstanding, interestRate: Number(loanForm.interestRate || 0), emiAmount: Number(loanForm.emiAmount || 0) }) });
+      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...loanForm, principal, outstanding, interestRate: Number(loanForm.interestRate || 0), emiAmount: Number(loanForm.emiAmount || 0), tenureMonths: Number(loanForm.tenureMonths || 0), emiDay: Number(loanForm.emiDay || 1) }) });
       if (res.ok) { setShowLoanModal(false); fetchLoans(); }
       else setLoanError((await res.json()).error || "Failed.");
     } finally { setLoanSaving(false); }
@@ -456,7 +511,7 @@ export default function ExpenseApp() {
     await fetch(`/api/loans/${l._id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: l.status === "active" ? "closed" : "active" }) });
     fetchLoans();
   }
-  function openPayment(l) { setPaymentLoan(l); setPaymentAmount(""); setPaymentNote(""); setPaymentDate(todayISO()); setShowPaymentModal(true); }
+  function openPayment(l, prefillAmt = "", prefillDate = "") { setPaymentLoan(l); setPaymentAmount(prefillAmt ? String(Math.round(prefillAmt)) : ""); setPaymentNote(""); setPaymentDate(prefillDate || todayISO()); setShowPaymentModal(true); }
   async function savePayment() {
     if (!paymentAmount || Number(paymentAmount) <= 0) return;
     setPaymentSaving(true);
@@ -553,6 +608,26 @@ export default function ExpenseApp() {
       } else setInvestError("Could not fetch price. Check the symbol.");
     } catch { setInvestError("Failed to fetch stock price."); }
     finally { setStockFetching(false); }
+  }
+
+  async function fetchGoldPrice() {
+    setGoldFetching(true);
+    try {
+      const res = await fetch("/api/investments/gold-price");
+      if (res.ok) {
+        const { pricePerGramINR } = await res.json();
+        if (pricePerGramINR) {
+          const grams = Number(investForm.units) || 0;
+          setInvestForm(f => ({
+            ...f,
+            currentValue: grams > 0
+              ? String((grams * pricePerGramINR).toFixed(2))
+              : String(pricePerGramINR.toFixed(2)),
+          }));
+        }
+      } else setInvestError("Could not fetch gold price.");
+    } catch { setInvestError("Failed to fetch gold price."); }
+    finally { setGoldFetching(false); }
   }
 
   async function refreshAllPrices() {
@@ -938,7 +1013,7 @@ export default function ExpenseApp() {
                   .map((name, i) => <option key={i + 1} value={i + 1}>{name}</option>)}
               </select>
             </div>
-            <button className="btn btn-ghost" style={{ width: "auto", padding: "0.35rem 0.75rem", fontSize: "0.75rem", marginTop: 0 }} onClick={downloadReport}>⬇ Report</button>
+            <button className="btn btn-ghost" onClick={downloadReport} style={{ width: "auto", padding: "0.3rem 0.6rem", fontSize: "0.72rem", marginTop: 0, display: "flex", alignItems: "center", gap: "0.3rem" }}><Download size={12} /> Report</button>
           </div>
 
           {/* Hero balance */}
@@ -954,7 +1029,7 @@ export default function ExpenseApp() {
                 <div style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: "0.5rem" }}>
                   Closing balance · opening {fmt(openingBalance)}
                   {!editingOpening && (
-                    <button onClick={() => { setOpeningInput(String(openingBalance)); setEditingOpening(true); }} style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", fontSize: "0.75rem", marginLeft: "0.5rem" }}>✏️</button>
+                    <button onClick={() => { setOpeningInput(String(openingBalance)); setEditingOpening(true); }} style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", marginLeft: "0.5rem", display: "inline-flex" }}><Pencil size={12} /></button>
                   )}
                 </div>
                 {editingOpening && (
@@ -970,7 +1045,7 @@ export default function ExpenseApp() {
 
           {/* Income / Expense 2-col */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", marginBottom: "1rem" }}>
-            <div style={{ background: "rgba(0,230,118,0.06)", border: "1px solid rgba(0,230,118,0.14)", borderRadius: "var(--radius-lg)", padding: "1rem 1.1rem" }}>
+            <div style={{ background: "rgba(0,230,118,0.06)", border: "1px solid rgba(0,230,118,0.14)", borderRadius: "var(--radius-lg)", padding: "1rem 1.1rem", cursor: "pointer" }} onClick={() => setActiveTab("transactions")}>
               <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.5rem" }}>
                 <div style={{ width: 28, height: 28, borderRadius: 8, background: "rgba(0,230,118,0.12)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <ArrowUpRight size={15} color="var(--success)" />
@@ -979,7 +1054,7 @@ export default function ExpenseApp() {
               </div>
               <div style={{ fontSize: "1.45rem", fontWeight: 800, letterSpacing: "-0.04em", color: "var(--success)" }}>{statsLoading ? "—" : fmt(stats?.totalIncome || 0)}</div>
             </div>
-            <div style={{ background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.14)", borderRadius: "var(--radius-lg)", padding: "1rem 1.1rem" }}>
+            <div style={{ background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.14)", borderRadius: "var(--radius-lg)", padding: "1rem 1.1rem", cursor: "pointer" }} onClick={() => setActiveTab("transactions")}>
               <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.5rem" }}>
                 <div style={{ width: 28, height: 28, borderRadius: 8, background: "rgba(248,113,113,0.12)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <ArrowDownRight size={15} color="var(--error)" />
@@ -990,70 +1065,145 @@ export default function ExpenseApp() {
             </div>
           </div>
 
-          {/* Investment snapshot */}
-          {investSummary && investSummary.totalInvested > 0 && (
-            <div className="chart-card" style={{ marginBottom: "1rem", cursor: "pointer" }} onClick={() => setActiveTab("investments")}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
-                <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Portfolio</div>
-                <span style={{ fontSize: "0.72rem", color: "var(--accent-light)" }}>View all →</span>
-              </div>
-              <div className="snapshot-3col" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "0.5rem" }}>
-                <div>
-                  <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Invested</div>
-                  <div style={{ fontWeight: 600, fontSize: "0.88rem" }}>{fmt(investSummary.totalInvested)}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Current</div>
-                  <div style={{ fontWeight: 600, fontSize: "0.88rem", color: "var(--success)" }}>{fmt(investSummary.totalCurrent)}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Profit / Loss</div>
-                  <div style={{ fontWeight: 700, fontSize: "0.88rem", color: investSummary.totalGain >= 0 ? "var(--success)" : "var(--error)" }}>
-                    {investSummary.totalGain >= 0 ? "+" : ""}{fmt(investSummary.totalGain)}
-                    <span style={{ fontSize: "0.65rem", fontWeight: 500, marginLeft: "0.25rem" }}>({investSummary.gainPct >= 0 ? "+" : ""}{investSummary.gainPct.toFixed(1)}%)</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Loans snapshot */}
-          {loans.length > 0 && (() => {
-            const activeLoans = loans.filter(l => l.status === "active");
-            const borrowed    = activeLoans.filter(l => l.type === "borrowed");
-            const lent        = activeLoans.filter(l => l.type === "lent");
-            const totalOwed   = borrowed.reduce((s, l) => s + (l.outstanding || 0), 0);
-            const totalLent   = lent.reduce((s, l) => s + (l.outstanding || 0), 0);
-            if (activeLoans.length === 0) return null;
+          {/* ── Net Worth ─────────────────────────────────────────────────── */}
+          {(() => {
+            const portfolioValue  = investSummary?.totalCurrent || 0;
+            const goalSavings     = goals.reduce((s, g) => s + (g.savedAmount || 0), 0);
+            const owedToMe        = loans.filter(l => l.type === "lent"     && l.status === "active").reduce((s, l) => s + loanRemainingPayable(l), 0);
+            const totalAssets     = portfolioValue + goalSavings + owedToMe;
+            const loansOwed       = loans.filter(l => l.type === "borrowed" && l.status === "active").reduce((s, l) => s + loanRemainingPayable(l), 0);
+            const totalLiabilities = loansOwed;
+            const netWorth        = totalAssets - totalLiabilities;
+            if (totalAssets === 0 && totalLiabilities === 0) return null;
+            const assetPct = totalAssets + totalLiabilities > 0
+              ? Math.round((totalAssets / (totalAssets + totalLiabilities)) * 100) : 100;
             return (
-              <div className="chart-card" style={{ marginBottom: "1rem", cursor: "pointer" }} onClick={() => setActiveTab("loans")}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
-                  <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Loans</div>
-                  <span style={{ fontSize: "0.72rem", color: "var(--accent-light)" }}>View all →</span>
+              <div className="chart-card" style={{
+                marginBottom: "1rem",
+                background: netWorth >= 0
+                  ? "linear-gradient(135deg, rgba(52,211,153,0.06) 0%, var(--surface) 60%)"
+                  : "linear-gradient(135deg, rgba(248,113,113,0.06) 0%, var(--surface) 60%)",
+                border: `1px solid ${netWorth >= 0 ? "rgba(52,211,153,0.22)" : "rgba(248,113,113,0.22)"}`,
+              }}>
+                {/* Header row */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.9rem" }}>
+                  <div>
+                    <div style={{ fontSize: "0.65rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700, marginBottom: "0.3rem" }}>Net Worth</div>
+                    <div style={{ fontSize: "2rem", fontWeight: 900, letterSpacing: "-0.04em", lineHeight: 1, color: netWorth >= 0 ? "var(--success)" : "var(--error)" }}>
+                      {netWorth < 0 ? "−" : ""}{fmt(Math.abs(netWorth))}
+                    </div>
+                    {netWorth < 0 && <div style={{ fontSize: "0.62rem", color: "var(--error)", marginTop: "0.2rem" }}>Liabilities exceed assets</div>}
+                  </div>
+                  <div style={{ textAlign: "right", paddingTop: "0.15rem" }}>
+                    <div style={{ fontSize: "0.72rem", color: "var(--success)", fontWeight: 700 }}>{fmt(totalAssets)}</div>
+                    <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.2rem" }}>assets</div>
+                    <div style={{ fontSize: "0.72rem", color: "var(--error)", fontWeight: 700 }}>−{fmt(totalLiabilities)}</div>
+                    <div style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>liabilities</div>
+                  </div>
                 </div>
-                <div className="snapshot-3col" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "0.5rem" }}>
-                  <div>
-                    <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Active</div>
-                    <div style={{ fontWeight: 600, fontSize: "0.88rem" }}>{activeLoans.length} loan{activeLoans.length !== 1 ? "s" : ""}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>You Owe</div>
-                    <div style={{ fontWeight: 700, fontSize: "0.88rem", color: totalOwed > 0 ? "var(--error)" : "var(--text-muted)" }}>{fmt(totalOwed)}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>You're Owed</div>
-                    <div style={{ fontWeight: 700, fontSize: "0.88rem", color: totalLent > 0 ? "var(--success)" : "var(--text-muted)" }}>{fmt(totalLent)}</div>
-                  </div>
+
+                {/* Assets vs Liabilities split bar */}
+                <div style={{ height: 7, background: "rgba(248,113,113,0.25)", borderRadius: 6, overflow: "hidden", marginBottom: "0.3rem" }}>
+                  <div style={{ width: `${assetPct}%`, height: "100%", background: "var(--success)", borderRadius: 6, transition: "width 0.4s ease" }} />
                 </div>
-                {borrowed.slice(0, 2).map(l => (
-                  <div key={l._id} style={{ marginTop: "0.5rem", display: "flex", justifyContent: "space-between", fontSize: "0.72rem", color: "var(--text-muted)", borderTop: "1px solid var(--border)", paddingTop: "0.4rem" }}>
-                    <span>{l.party}</span>
-                    <span style={{ color: "var(--error)", fontWeight: 600 }}>{fmt(l.outstanding, l.currency)} outstanding</span>
-                  </div>
-                ))}
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.58rem", color: "var(--text-muted)", marginBottom: "0.75rem" }}>
+                  <span style={{ color: "var(--success)" }}>Assets {assetPct}%</span>
+                  <span style={{ color: "var(--error)" }}>Liabilities {100 - assetPct}%</span>
+                </div>
+
+                {/* Breakdown accordion */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                  {/* ── Assets accordion ── */}
+                  {totalAssets > 0 && (
+                    <button
+                      onClick={() => setNwExpanded(s => ({ ...s, assets: !s.assets }))}
+                      style={{ all: "unset", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.35rem 0", borderTop: "1px solid var(--border)", cursor: "pointer", width: "100%" }}
+                    >
+                      <span style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.63rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-muted)" }}>
+                        <ChevronDown size={12} style={{ transform: nwExpanded.assets ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.2s ease", color: "var(--success)" }} />
+                        Assets
+                      </span>
+                      <span style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--success)" }}>{fmt(totalAssets)}</span>
+                    </button>
+                  )}
+                  {nwExpanded.assets && (
+                    <>
+                      {portfolioValue > 0 && investSummary?.byType && Object.entries(investSummary.byType).map(([type, v]) => {
+                        const gainPct = v.invested > 0 ? ((v.current - v.invested) / v.invested) * 100 : null;
+                        return (
+                          <div key={type} onClick={() => setActiveTab("investments")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "0.71rem", padding: "0.22rem 0 0.22rem 0.9rem", borderTop: "1px solid var(--border)", cursor: "pointer" }}>
+                            <span style={{ color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "0.3rem" }}>
+                              <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--success)", display: "inline-block", opacity: 0.7, flexShrink: 0 }} />
+                              {type.charAt(0).toUpperCase() + type.slice(1)}
+                            </span>
+                            <span style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                              <span style={{ color: "var(--success)", fontWeight: 600 }}>{fmt(v.current)}</span>
+                              {gainPct !== null && (
+                                <span style={{ fontSize: "0.62rem", fontWeight: 600, color: gainPct >= 0 ? "var(--success)" : "var(--error)" }}>
+                                  ({gainPct >= 0 ? "+" : ""}{gainPct.toFixed(1)}%)
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        );
+                      })}
+                      {portfolioValue > 0 && (!investSummary?.byType || Object.keys(investSummary.byType).length === 0) && (
+                        <div onClick={() => setActiveTab("investments")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "0.71rem", padding: "0.22rem 0 0.22rem 0.9rem", borderTop: "1px solid var(--border)", cursor: "pointer" }}>
+                          <span style={{ color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "0.3rem" }}>
+                            <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--success)", display: "inline-block", opacity: 0.7, flexShrink: 0 }} />
+                            Portfolio
+                          </span>
+                          <span style={{ color: "var(--success)", fontWeight: 600 }}>{fmt(portfolioValue)}</span>
+                        </div>
+                      )}
+                      {goals.filter(g => (g.savedAmount || 0) > 0).map(g => (
+                        <div key={g._id} onClick={() => setActiveTab("goals")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "0.71rem", padding: "0.22rem 0 0.22rem 0.9rem", borderTop: "1px solid var(--border)", cursor: "pointer" }}>
+                          <span style={{ color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "0.3rem" }}>
+                            <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--success)", display: "inline-block", opacity: 0.7, flexShrink: 0 }} />
+                            {g.name}
+                          </span>
+                          <span style={{ color: "var(--success)", fontWeight: 600 }}>{fmt(g.savedAmount, g.currency)}</span>
+                        </div>
+                      ))}
+                      {loans.filter(l => l.type === "lent" && l.status === "active").map(l => (
+                        <div key={l._id} onClick={() => setActiveTab("loans")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "0.71rem", padding: "0.22rem 0 0.22rem 0.9rem", borderTop: "1px solid var(--border)", cursor: "pointer" }}>
+                          <span style={{ color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "0.3rem" }}>
+                            <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--success)", display: "inline-block", opacity: 0.7, flexShrink: 0 }} />
+                            {l.party} (lent)
+                          </span>
+                          <span style={{ color: "var(--success)", fontWeight: 600 }}>{fmt(loanRemainingPayable(l), l.currency)}</span>
+                        </div>
+                      ))}
+                    </>
+                  )}
+
+                  {/* ── Liabilities accordion ── */}
+                  {totalLiabilities > 0 && (
+                    <button
+                      onClick={() => setNwExpanded(s => ({ ...s, liabilities: !s.liabilities }))}
+                      style={{ all: "unset", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.35rem 0", borderTop: "1px solid var(--border)", marginTop: "0.1rem", cursor: "pointer", width: "100%" }}
+                    >
+                      <span style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.63rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-muted)" }}>
+                        <ChevronDown size={12} style={{ transform: nwExpanded.liabilities ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.2s ease", color: "var(--error)" }} />
+                        Liabilities
+                      </span>
+                      <span style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--error)" }}>−{fmt(totalLiabilities)}</span>
+                    </button>
+                  )}
+                  {nwExpanded.liabilities && loans.filter(l => l.type === "borrowed" && l.status === "active").map(l => (
+                    <div key={l._id} onClick={() => setActiveTab("loans")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "0.71rem", padding: "0.22rem 0 0.22rem 0.9rem", borderTop: "1px solid var(--border)", cursor: "pointer" }}>
+                      <span style={{ color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "0.3rem" }}>
+                        <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--error)", display: "inline-block", opacity: 0.7, flexShrink: 0 }} />
+                        {l.party} (borrowed)
+                      </span>
+                      <span style={{ color: "var(--error)", fontWeight: 600 }}>−{fmt(loanRemainingPayable(l), l.currency)}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             );
           })()}
+
 
           {/* Chit Funds snapshot */}
           {chits.length > 0 && (() => {
@@ -1312,7 +1462,7 @@ export default function ExpenseApp() {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.6rem" }}>
               <div className="chart-title" style={{ marginBottom: 0 }}>Month Balance</div>
               {!editingOpening ? (
-                <button className="icon-btn" style={{ fontSize: "0.75rem" }} onClick={() => { setOpeningInput(String(openingBalance)); setEditingOpening(true); }}>✏️ Set Opening</button>
+                <button className="icon-btn" style={{ display: "flex", alignItems: "center", gap: "0.25rem", fontSize: "0.75rem" }} onClick={() => { setOpeningInput(String(openingBalance)); setEditingOpening(true); }}><Pencil size={12} /> Set Opening</button>
               ) : (
                 <div style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
                   <input className="form-input" type="number" value={openingInput} onChange={e => setOpeningInput(e.target.value)} style={{ width: 110, padding: "0.3rem 0.5rem", fontSize: "0.82rem" }} autoFocus onKeyDown={e => e.key === "Enter" && saveOpeningBalance()} />
@@ -1427,9 +1577,9 @@ export default function ExpenseApp() {
                         {exp.type === "income" ? "+" : "−"}{expSym}{Number(exp.amount).toLocaleString("en-IN", { maximumFractionDigits: 0 })}
                       </span>
                       <div className="tx-actions">
-                        <button className="icon-btn" onClick={() => openEdit(exp)} title="Edit">✏️</button>
+                        <button className="icon-btn" onClick={() => openEdit(exp)} title="Edit"><Pencil size={13} /></button>
                         <button className="icon-btn" onClick={() => duplicateExpense(exp._id)} title="Duplicate"><Copy size={12} /></button>
-                        <button className="icon-btn" onClick={() => deleteExpense(exp._id)} title="Delete">🗑️</button>
+                        <button className="icon-btn" onClick={() => deleteExpense(exp._id)} title="Delete"><Trash2 size={13} /></button>
                       </div>
                     </div>
                   </div>
@@ -1452,7 +1602,7 @@ export default function ExpenseApp() {
               {!editingOverall ? (
                 <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
                   <span style={{ fontSize: "0.9rem", fontWeight: 700 }}>{overallBudget ? fmt(overallBudget.amount) : "Not set"}</span>
-                  <button className="icon-btn" onClick={() => { setOverallInput(overallBudget ? String(overallBudget.amount) : ""); setEditingOverall(true); }}>{overallBudget ? "✏️" : "➕"}</button>
+                  <button className="icon-btn" onClick={() => { setOverallInput(overallBudget ? String(overallBudget.amount) : ""); setEditingOverall(true); }}>{overallBudget ? <Pencil size={13} /> : <PlusCircle size={13} />}</button>
                 </div>
               ) : (
                 <div style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
@@ -1499,7 +1649,7 @@ export default function ExpenseApp() {
           </div>
 
           {/* Per-category budgets */}
-          <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginBottom: "0.85rem" }}>Tap ➕ to set a budget, ✏️ to edit.</p>
+          <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginBottom: "0.85rem" }}>Tap + to set a budget, pencil to edit.</p>
           {EXPENSE_CATEGORIES.map(cat => {
             const budget = stats?.budgets?.find(b => b.category === cat.key);
             const spent  = stats?.byCategory?.find(c => c.category === cat.key)?.total || 0;
@@ -1521,7 +1671,7 @@ export default function ExpenseApp() {
                   ) : (
                     <div style={{ display: "flex", gap: "0.6rem", alignItems: "center" }}>
                       <span className="budget-amounts">{fmt(spent)}{budgeted > 0 ? ` / ${fmt(budgeted)}` : ""}</span>
-                      <button className="icon-btn" onClick={() => { setEditingBudget(cat.key); setBudgetInput(budgeted ? String(budgeted) : ""); }}>{budgeted ? "✏️" : "➕"}</button>
+                      <button className="icon-btn" onClick={() => { setEditingBudget(cat.key); setBudgetInput(budgeted ? String(budgeted) : ""); }}>{budgeted ? <Pencil size={13} /> : <PlusCircle size={13} />}</button>
                     </div>
                   )}
                 </div>
@@ -1571,9 +1721,9 @@ export default function ExpenseApp() {
                         </div>
                       </div>
                       <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
-                        <button className="icon-btn" onClick={() => toggleGoalComplete(g)} title={g.isCompleted ? "Reopen" : "Mark complete"} style={{ fontSize: "0.9rem" }}>{g.isCompleted ? "↩️" : "✅"}</button>
-                        <button className="icon-btn" onClick={() => openEditGoal(g)}>✏️</button>
-                        <button className="icon-btn" onClick={() => deleteGoal(g._id)}>🗑️</button>
+                        <button className="icon-btn" onClick={() => toggleGoalComplete(g)} title={g.isCompleted ? "Reopen" : "Mark complete"}>{g.isCompleted ? <RotateCcw size={14} /> : <CheckCircle2 size={14} />}</button>
+                        <button className="icon-btn" onClick={() => openEditGoal(g)}><Pencil size={13} /></button>
+                        <button className="icon-btn" onClick={() => deleteGoal(g._id)}><Trash2 size={13} /></button>
                       </div>
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.78rem", marginBottom: "0.45rem", color: "var(--text-muted)" }}>
@@ -1627,9 +1777,9 @@ export default function ExpenseApp() {
                         {r.type === "income" ? "+" : "−"}{sym(r.currency)}{Number(r.amount).toLocaleString("en-IN")}
                       </span>
                       <div className="tx-actions" style={{ opacity: 1 }}>
-                        <button className="icon-btn" title={r.isActive ? "Pause" : "Resume"} onClick={() => toggleRecurring(r)}>{r.isActive ? "⏸" : "▶️"}</button>
-                        <button className="icon-btn" onClick={() => openEditRecurring(r)}>✏️</button>
-                        <button className="icon-btn" onClick={() => deleteRecurring(r._id)}>🗑️</button>
+                        <button className="icon-btn" title={r.isActive ? "Pause" : "Resume"} onClick={() => toggleRecurring(r)}>{r.isActive ? <Pause size={13} /> : <Play size={13} />}</button>
+                        <button className="icon-btn" onClick={() => openEditRecurring(r)}><Pencil size={13} /></button>
+                        <button className="icon-btn" onClick={() => deleteRecurring(r._id)}><Trash2 size={13} /></button>
                       </div>
                     </div>
                   </div>
@@ -1769,8 +1919,8 @@ export default function ExpenseApp() {
         <div className="tab-content">
           {/* Summary bar */}
           {!loansLoading && loans.length > 0 && (() => {
-            const totalBorrowed = loans.filter(l => l.type === "borrowed" && l.status === "active").reduce((s, l) => s + l.outstanding, 0);
-            const totalLent     = loans.filter(l => l.type === "lent"     && l.status === "active").reduce((s, l) => s + l.outstanding, 0);
+            const totalBorrowed = loans.filter(l => l.type === "borrowed" && l.status === "active").reduce((s, l) => s + loanRemainingPayable(l), 0);
+            const totalLent     = loans.filter(l => l.type === "lent"     && l.status === "active").reduce((s, l) => s + loanRemainingPayable(l), 0);
             return (
               <div className="stat-grid" style={{ marginBottom: "1.25rem" }}>
                 <div className="stat-card">
@@ -1810,39 +1960,63 @@ export default function ExpenseApp() {
                 return (
                   <div key={l._id} className={`loan-card ${l.status === "closed" ? "loan-closed" : ""}`}>
                     <div className="loan-header">
-                      <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                      {/* Left: icon + name/purpose */}
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.55rem", minWidth: 0 }}>
                         <div className={`loan-type-badge ${l.type === "borrowed" ? "loan-borrowed" : "loan-lent"}`}>
-                          {l.type === "borrowed" ? <TrendingDown size={12} /> : <TrendingUp size={12} />}
-                          {l.type === "borrowed" ? "Borrowed" : "Lent"}
+                          {l.type === "borrowed" ? <TrendingDown size={13} /> : <TrendingUp size={13} />}
                         </div>
-                        <div>
-                          <div style={{ fontWeight: 600, fontSize: "0.875rem" }}>{l.party}</div>
-                          <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", textTransform: "capitalize" }}>{l.purpose}</div>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: "0.875rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.party}</div>
+                          <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", textTransform: "capitalize" }}>{l.purpose}{l.interestRate > 0 ? ` · ${l.interestRate}% p.a.` : ""}</div>
                         </div>
                       </div>
-                      <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
-                        {l.status === "active" && <button className="icon-btn" onClick={() => openPayment(l)} title="Log payment" style={{ fontSize: "0.75rem", color: "var(--success)" }}>Pay</button>}
-                        <button className="icon-btn" onClick={() => closeLoan(l)} title={l.status === "active" ? "Mark closed" : "Reopen"} style={{ fontSize: "0.85rem" }}>{l.status === "active" ? "✅" : "↩️"}</button>
-                        <button className="icon-btn" onClick={() => openEditLoan(l)}>✏️</button>
-                        <button className="icon-btn" onClick={() => deleteLoan(l._id)}>🗑️</button>
+                      {/* Right: action buttons */}
+                      <div style={{ display: "flex", gap: "0.25rem", alignItems: "center", flexShrink: 0 }}>
+                        {l.status === "active" && (
+                          <button className="icon-btn" onClick={() => openPayment(l)} title="Log payment"
+                            style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--success)", padding: "0.2rem 0.45rem", border: "1px solid rgba(52,211,153,0.3)", borderRadius: 6 }}>
+                            Pay
+                          </button>
+                        )}
+                        <button className="icon-btn" onClick={() => closeLoan(l)} title={l.status === "active" ? "Mark closed" : "Reopen"}>
+                          {l.status === "active" ? <CheckCircle2 size={14} /> : <RotateCcw size={14} />}
+                        </button>
+                        <button className="icon-btn" onClick={() => openEditLoan(l)} title="Edit"><Pencil size={13} /></button>
+                        <button className="icon-btn" onClick={() => deleteLoan(l._id)} title="Delete"><Trash2 size={13} /></button>
                       </div>
                     </div>
 
-                    {/* Paid / Remaining / Principal row */}
-                    <div className="loan-breakdown-grid">
-                      <div style={{ background: "var(--surface2)", borderRadius: 8, padding: "0.4rem 0.3rem" }}>
-                        <div style={{ fontSize: "0.58rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Principal</div>
-                        <div style={{ fontWeight: 600, fontSize: "0.78rem" }}>{fmt(l.principal, l.currency)}</div>
-                      </div>
-                      <div style={{ background: "rgba(52,211,153,0.1)", borderRadius: 8, padding: "0.4rem 0.3rem" }}>
-                        <div style={{ fontSize: "0.58rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Paid</div>
-                        <div style={{ fontWeight: 700, fontSize: "0.78rem", color: "var(--success)" }}>{fmt(l.principal - l.outstanding, l.currency)}</div>
-                      </div>
-                      <div style={{ background: l.type === "borrowed" ? "rgba(248,113,113,0.1)" : "rgba(52,211,153,0.08)", borderRadius: 8, padding: "0.4rem 0.3rem" }}>
-                        <div style={{ fontSize: "0.58rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Remaining</div>
-                        <div style={{ fontWeight: 700, fontSize: "0.78rem", color: l.type === "borrowed" ? "var(--error)" : "var(--success)" }}>{fmt(l.outstanding, l.currency)}</div>
-                      </div>
-                    </div>
+                    {/* Single row of all stat cards */}
+                    {(() => {
+                      const hasInterest = l.interestRate > 0 && l.tenureMonths > 0 && l.interestType !== "none";
+                      const P = l.principal, R = l.interestRate, N = l.tenureMonths;
+                      let totalInterest = 0, totalPayable = P;
+                      if (hasInterest) {
+                        if (l.interestType === "simple") {
+                          totalInterest = P * R * (N / 12) / 100;
+                        } else {
+                          const r = R / 100 / 12;
+                          const emi = r > 0 ? P * r * Math.pow(1 + r, N) / (Math.pow(1 + r, N) - 1) : P / N;
+                          totalInterest = emi * N - P;
+                        }
+                        totalPayable = P + totalInterest;
+                      }
+                      const statCard = (label, value, bg, color) => (
+                        <div style={{ background: bg, borderRadius: 8, padding: "0.38rem 0.25rem", textAlign: "center" }}>
+                          <div style={{ fontSize: "0.5rem", color: "var(--text-muted)", marginBottom: "0.1rem", whiteSpace: "nowrap" }}>{label}</div>
+                          <div style={{ fontWeight: 700, fontSize: "0.7rem", color: color || "inherit", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{value}</div>
+                        </div>
+                      );
+                      return (
+                        <div className={`loan-stats-row${hasInterest ? "" : " no-interest"}`}>
+                          {statCard("Principal",  fmt(P, l.currency),                    "var(--surface2)",               "var(--text)")}
+                          {hasInterest && statCard("Interest",   fmt(totalInterest, l.currency),  "rgba(248,113,113,0.1)",          "var(--error)")}
+                          {statCard("Paid",       fmt(P - l.outstanding, l.currency),   "rgba(52,211,153,0.1)",           "var(--success)")}
+                          {statCard("Remaining",  fmt(l.outstanding, l.currency),        l.type === "borrowed" ? "rgba(248,113,113,0.08)" : "rgba(52,211,153,0.08)", l.type === "borrowed" ? "var(--error)" : "var(--success)")}
+                          {hasInterest && statCard("Total",      fmt(totalPayable, l.currency),   "rgba(99,102,241,0.1)",            "var(--accent-light)")}
+                        </div>
+                      );
+                    })()}
 
                     {/* Progress bar */}
                     {l.status === "active" && (
@@ -1875,6 +2049,18 @@ export default function ExpenseApp() {
                         <span>{l.payments.length} payment{l.payments.length !== 1 ? "s" : ""} · Last {fmt(l.payments[l.payments.length - 1].amount, l.currency)} on {formatDate(l.payments[l.payments.length - 1].date)}</span>
                       )}
                     </div>
+
+                    {/* EMI Schedule button — always visible when tenure is set */}
+                    {l.tenureMonths > 0 && (
+                      <button
+                        onClick={() => setShowScheduleModal(l)}
+                        style={{ marginTop: "0.65rem", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.4rem", padding: "0.48rem", background: "var(--surface3)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", color: "var(--accent-light)", fontSize: "0.75rem", fontWeight: 600, cursor: "pointer", fontFamily: "var(--font)", transition: "background var(--transition)" }}
+                      >
+                        <ListOrdered size={13} />
+                        View EMI Schedule
+                        <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>({l.tenureMonths - (l.outstanding >= l.principal ? 0 : Math.max(0, Math.round((l.principal - l.outstanding) / (l.emiAmount || 1))))} remaining)</span>
+                      </button>
+                    )}
                   </div>
                 );
               })}
@@ -2053,8 +2239,8 @@ export default function ExpenseApp() {
 
                       {/* Actions col */}
                       <div style={{ display: "flex", flexDirection: "column", gap: "0.15rem", alignItems: "flex-end" }}>
-                        <button className="icon-btn" style={{ fontSize: "0.75rem", padding: "0.15rem 0.3rem" }} onClick={() => openEditInvest(inv)}>✏️</button>
-                        <button className="icon-btn" style={{ fontSize: "0.75rem", padding: "0.15rem 0.3rem" }} onClick={() => deleteInvest(inv._id)}>🗑️</button>
+                        <button className="icon-btn" style={{ padding: "0.15rem 0.3rem" }} onClick={() => openEditInvest(inv)}><Pencil size={13} /></button>
+                        <button className="icon-btn" style={{ padding: "0.15rem 0.3rem" }} onClick={() => deleteInvest(inv._id)}><Trash2 size={13} /></button>
                       </div>
                     </div>
                   );
@@ -2106,8 +2292,8 @@ export default function ExpenseApp() {
                         <span style={{ fontSize: "0.68rem", padding: "0.2rem 0.5rem", borderRadius: 20, background: c.status === "active" ? "var(--success)22" : "var(--text-muted)22", color: c.status === "active" ? "var(--success)" : "var(--text-muted)", fontWeight: 600 }}>
                           {c.status}
                         </span>
-                        <button className="icon-btn" onClick={() => openEditChit(c)}>✏️</button>
-                        <button className="icon-btn" onClick={() => deleteChit(c._id)}>🗑️</button>
+                        <button className="icon-btn" onClick={() => openEditChit(c)}><Pencil size={13} /></button>
+                        <button className="icon-btn" onClick={() => deleteChit(c._id)}><Trash2 size={13} /></button>
                       </div>
                     </div>
 
@@ -2651,6 +2837,58 @@ export default function ExpenseApp() {
             </div>
 
             <div className="form-group">
+              <label className="form-label">Tenure <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)" }}>(months, optional)</span></label>
+              <input className="form-input" type="number" min="1" placeholder="e.g. 24, 60, 120" value={loanForm.tenureMonths} onChange={e => setLoanForm(f => ({ ...f, tenureMonths: e.target.value }))} />
+              <div style={{ display: "flex", gap: "0.3rem", flexWrap: "wrap", marginTop: "0.4rem" }}>
+                {[6, 12, 24, 36, 60, 84, 120, 180, 240].map(m => (
+                  <button key={m} type="button" onClick={() => setLoanForm(f => ({ ...f, tenureMonths: String(m) }))} style={{ padding: "0.18rem 0.5rem", borderRadius: 20, border: `1px solid ${Number(loanForm.tenureMonths) === m ? "var(--accent)" : "var(--border)"}`, background: Number(loanForm.tenureMonths) === m ? "var(--accent-dim)" : "none", color: Number(loanForm.tenureMonths) === m ? "var(--accent-light)" : "var(--text-muted)", fontSize: "0.65rem", cursor: "pointer", fontFamily: "var(--font)" }}>
+                    {m >= 12 ? `${m / 12}y` : `${m}m`}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Live interest calculation preview */}
+            {Number(loanForm.principal) > 0 && Number(loanForm.interestRate) > 0 && Number(loanForm.tenureMonths) > 0 && loanForm.interestType !== "none" && (() => {
+              const P = Number(loanForm.principal);
+              const R = Number(loanForm.interestRate);
+              const N = Number(loanForm.tenureMonths);
+              let totalInterest = 0, emi = 0;
+              if (loanForm.interestType === "simple") {
+                totalInterest = P * R * (N / 12) / 100;
+                emi = (P + totalInterest) / N;
+              } else {
+                const r = R / 100 / 12;
+                emi = r > 0 ? P * r * Math.pow(1 + r, N) / (Math.pow(1 + r, N) - 1) : P / N;
+                totalInterest = emi * N - P;
+              }
+              return (
+                <div style={{ background: "var(--accent-dim)", border: "1px solid var(--border-hover)", borderRadius: "var(--radius)", padding: "0.75rem 0.9rem", marginBottom: "0.75rem" }}>
+                  <div style={{ fontSize: "0.67rem", color: "var(--text-muted)", marginBottom: "0.5rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Loan Summary</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.5rem" }}>
+                    <div>
+                      <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Monthly EMI</div>
+                      <div style={{ fontWeight: 700, fontSize: "0.82rem" }}>{fmt(emi, loanForm.currency)}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Total Interest</div>
+                      <div style={{ fontWeight: 700, fontSize: "0.82rem", color: "var(--error)" }}>{fmt(totalInterest, loanForm.currency)}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>Total Payable</div>
+                      <div style={{ fontWeight: 700, fontSize: "0.82rem" }}>{fmt(P + totalInterest, loanForm.currency)}</div>
+                    </div>
+                  </div>
+                  {emi > 0 && !loanForm.emiAmount && (
+                    <button type="button" style={{ marginTop: "0.5rem", fontSize: "0.68rem", color: "var(--accent-light)", background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: "var(--font)" }} onClick={() => setLoanForm(f => ({ ...f, emiAmount: String(Math.round(emi)) }))}>
+                      ↑ Auto-fill EMI
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
+
+            <div className="form-group">
               <label className="form-label">EMI Amount <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span></label>
               <input className="form-input" type="number" min="0" placeholder="0" value={loanForm.emiAmount} onChange={e => setLoanForm(f => ({ ...f, emiAmount: e.target.value }))} />
             </div>
@@ -2660,8 +2898,16 @@ export default function ExpenseApp() {
                 <label className="form-label">Start Date</label>
                 <input className="form-input" type="date" value={loanForm.startDate} onChange={e => setLoanForm(f => ({ ...f, startDate: e.target.value }))} />
               </div>
+              <div className="form-group" style={{ width: 110 }}>
+                <label className="form-label">EMI Day</label>
+                <select className="form-input" value={loanForm.emiDay} onChange={e => setLoanForm(f => ({ ...f, emiDay: e.target.value }))}>
+                  {Array.from({ length: 28 }, (_, i) => i + 1).map(d => (
+                    <option key={d} value={d}>{d}{d === 1 ? "st" : d === 2 ? "nd" : d === 3 ? "rd" : "th"}</option>
+                  ))}
+                </select>
+              </div>
               <div className="form-group" style={{ flex: 1 }}>
-                <label className="form-label">Due Date <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span></label>
+                <label className="form-label">End Date <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span></label>
                 <input className="form-input" type="date" value={loanForm.dueDate} onChange={e => setLoanForm(f => ({ ...f, dueDate: e.target.value }))} />
               </div>
             </div>
@@ -2706,6 +2952,93 @@ export default function ExpenseApp() {
           </div>
         </div>
       )}
+
+      {/* ══════════════════════════════════════════════════════════════════
+          EMI SCHEDULE MODAL
+      ══════════════════════════════════════════════════════════════════ */}
+      {showScheduleModal && (() => {
+        const l = showScheduleModal;
+        const rows = calcAmortization(l.principal, l.interestRate, l.tenureMonths, l.interestType);
+        if (!rows.length) return null;
+        const emi = rows[0].emi;
+        // Determine paid count by matching outstanding balance to schedule
+        const paidCount = l.outstanding >= l.principal ? 0
+          : rows.findIndex(r => r.balance <= l.outstanding + 0.5) + 1 || rows.length;
+        const startDate = l.startDate ? new Date(l.startDate) : new Date();
+        const emiDay = l.emiDay || 1;
+        const col = { padding: "0.55rem 0.5rem", fontSize: "0.72rem", borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" };
+        const hdr = { ...col, fontSize: "0.62rem", color: "var(--text-muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", background: "var(--surface3)" };
+        return (
+          <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowScheduleModal(null)}>
+            <div className="modal" style={{ maxWidth: 580, padding: "1.25rem 0 0" }}>
+              <div className="modal-title" style={{ padding: "0 1.25rem 1rem" }}>
+                <div>
+                  <div style={{ fontSize: "0.92rem" }}>EMI Schedule — {l.party}</div>
+                  <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", fontWeight: 400, marginTop: "0.2rem" }}>
+                    {fmt(emi, l.currency)}/mo · {l.tenureMonths} months · {paidCount} paid · {l.tenureMonths - paidCount} remaining
+                  </div>
+                </div>
+                <button className="icon-btn" onClick={() => setShowScheduleModal(null)}>✕</button>
+              </div>
+
+              {/* Summary strip */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 0, background: "var(--surface2)", borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)", padding: "0.65rem 1.25rem" }}>
+                {[
+                  { label: "Principal", value: fmt(l.principal, l.currency) },
+                  { label: "Total Interest", value: fmt(emi * l.tenureMonths - l.principal, l.currency), color: "var(--error)" },
+                  { label: "Total Payable", value: fmt(emi * l.tenureMonths, l.currency) },
+                ].map(s => (
+                  <div key={s.label}>
+                    <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginBottom: "0.15rem" }}>{s.label}</div>
+                    <div style={{ fontWeight: 700, fontSize: "0.8rem", color: s.color || "var(--text)" }}>{s.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Table */}
+              <div style={{ overflowY: "auto", maxHeight: "55vh" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      {["#", "Due", "EMI", "Principal", "Interest", "Balance", ""].map(h => (
+                        <th key={h} style={{ ...hdr, textAlign: h === "" ? "center" : "right", ...(h === "#" || h === "Due" ? { textAlign: "left" } : {}) }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row, idx) => {
+                      const isPaid = idx < paidCount;
+                      const isNext = idx === paidCount;
+                      // Due date = emiDay of (startDate's month + idx + 1)
+                      const due = new Date(startDate.getFullYear(), startDate.getMonth() + idx + 1, emiDay);
+                      const dueDateStr = due.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "2-digit" });
+                      const dueDateISO = due.toISOString().slice(0, 10);
+                      return (
+                        <tr key={idx} style={{ background: isPaid ? "rgba(0,230,118,0.04)" : isNext ? "var(--accent-dim)" : "none" }}>
+                          <td style={{ ...col, textAlign: "left", color: isPaid ? "var(--text-muted)" : "var(--text)", paddingLeft: "1.25rem" }}>{row.month}</td>
+                          <td style={{ ...col, textAlign: "left", color: "var(--text-muted)" }}>{dueDateStr}</td>
+                          <td style={{ ...col, fontWeight: isNext ? 700 : 500 }}>{fmt(row.emi, l.currency)}</td>
+                          <td style={{ ...col, color: "var(--success)" }}>{fmt(row.principal, l.currency)}</td>
+                          <td style={{ ...col, color: "var(--error)" }}>{fmt(row.interest, l.currency)}</td>
+                          <td style={{ ...col, fontWeight: 600 }}>{fmt(row.balance, l.currency)}</td>
+                          <td style={{ ...col, paddingRight: "1.25rem", textAlign: "center" }}>
+                            {isPaid
+                              ? <Check size={14} color="var(--success)" />
+                              : isNext
+                                ? <button className="btn" style={{ width: "auto", padding: "0.2rem 0.6rem", fontSize: "0.68rem", marginTop: 0 }}
+                                    onClick={() => { setShowScheduleModal(null); openPayment(l, row.emi, dueDateISO); }}>Pay</button>
+                                : null}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ══════════════════════════════════════════════════════════════════
           INVESTMENT MODAL
@@ -2777,19 +3110,66 @@ export default function ExpenseApp() {
             {investForm.type !== "mutual_fund" && (
               <div className="form-group">
                 <label className="form-label">Name</label>
-                <input className="form-input" placeholder="e.g. HDFC Bank, SGB 2024" value={investForm.name} onChange={e => setInvestForm(f => ({ ...f, name: e.target.value }))} />
+                <input className="form-input"
+                  placeholder={investForm.type === "gold" ? "e.g. Physical Gold, SGB 2024, Gold ETF" : "e.g. HDFC Bank, SGB 2024"}
+                  value={investForm.name}
+                  onChange={e => setInvestForm(f => ({ ...f, name: e.target.value }))} />
+              </div>
+            )}
+
+            {/* Gold: live price fetch */}
+            {investForm.type === "gold" && (
+              <div className="form-group">
+                <label className="form-label">
+                  Live Gold Price <span style={{ textTransform: "none", fontWeight: 400, color: "var(--warning, #f59e0b)", fontSize: "0.68rem" }}>● MCX Spot</span>
+                </label>
+                <button
+                  className="btn"
+                  style={{ width: "auto", padding: "0.42rem 0.9rem", fontSize: "0.8rem", marginTop: 0 }}
+                  onClick={fetchGoldPrice}
+                  disabled={goldFetching}
+                >
+                  {goldFetching ? "Fetching…" : "Get Live Gold Price (per gram)"}
+                </button>
+                <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: "0.25rem" }}>
+                  Fetches COMEX spot rate (GC=F) converted to INR/gram via live USD/INR rate
+                </div>
               </div>
             )}
 
             {/* Units + Avg price */}
             <div style={{ display: "flex", gap: "0.5rem" }}>
               <div className="form-group" style={{ flex: 1 }}>
-                <label className="form-label">Units / Shares</label>
-                <input className="form-input" type="number" min="0" step="0.001" placeholder="0" value={investForm.units} onChange={e => setInvestForm(f => ({ ...f, units: e.target.value }))} />
+                <label className="form-label">
+                  {investForm.type === "gold" ? "Quantity (grams)" : "Units / Shares"}
+                </label>
+                <input className="form-input" type="number" min="0" step="0.001" placeholder="0"
+                  value={investForm.units}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setInvestForm(f => {
+                      if (f.type !== "gold") return { ...f, units: val };
+                      const grams = Number(val) || 0;
+                      const buyPrice = Number(f.avgPrice) || 0;
+                      return { ...f, units: val, ...(grams && buyPrice ? { investedAmount: String((grams * buyPrice).toFixed(2)) } : {}) };
+                    });
+                  }} />
               </div>
               <div className="form-group" style={{ flex: 1 }}>
-                <label className="form-label">Avg Buy Price</label>
-                <input className="form-input" type="number" min="0" step="0.01" placeholder="0" value={investForm.avgPrice} onChange={e => setInvestForm(f => ({ ...f, avgPrice: e.target.value }))} />
+                <label className="form-label">
+                  {investForm.type === "gold" ? "Buy Price / gram" : "Avg Buy Price"}
+                </label>
+                <input className="form-input" type="number" min="0" step="0.01" placeholder="0"
+                  value={investForm.avgPrice}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setInvestForm(f => {
+                      if (f.type !== "gold") return { ...f, avgPrice: val };
+                      const grams = Number(f.units) || 0;
+                      const buyPrice = Number(val) || 0;
+                      return { ...f, avgPrice: val, ...(grams && buyPrice ? { investedAmount: String((grams * buyPrice).toFixed(2)) } : {}) };
+                    });
+                  }} />
               </div>
             </div>
 
