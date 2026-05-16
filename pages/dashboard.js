@@ -8,6 +8,7 @@ import {
   FileText,
   Target,
   Calendar,
+  BarChart2,
 } from "lucide-react";
 import { getAuthUser } from "../lib/auth";
 import connectDB from "../lib/mongodb";
@@ -67,6 +68,15 @@ const APPS = [
     color: "#66d9e8",
     description: "Events & reminders",
     href: "/apps/calendar",
+    live: true,
+  },
+  {
+    key: "reports",
+    name: "Reports",
+    icon: BarChart2,
+    color: "#a78bfa",
+    description: "Monthly financial reports",
+    href: "/apps/reports",
     live: true,
   },
 ];
