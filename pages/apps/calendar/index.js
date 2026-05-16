@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
-import Link from "next/link";
 import { ChevronLeft, ChevronRight, Calendar, MapPin, Clock, X } from "lucide-react";
 import { getAuthUser } from "../../../lib/auth";
-import ThemePicker from "../../../components/ThemePicker";
+import AppNav from "../../../components/AppNav";
+import connectDB from "../../../lib/mongodb";
+import User from "../../../models/User";
 
 const CAT_COLORS = { work:"#6c63ff",personal:"#10b981",health:"#f97316",family:"#ec4899",social:"#0ea5e9",other:"#6b7280" };
 const EVENT_COLORS = ["#6c63ff","#f97316","#10b981","#f59e0b","#ec4899","#0ea5e9","#8b5cf6","#ef4444"];
@@ -15,7 +16,7 @@ function firstDayOffset(y,m) { return (new Date(y,m-1,1).getDay()+6)%7; }
 function dateToISO(d) { return new Date(d).toISOString().slice(0,10); }
 function initForm() { return { title:"",description:"",date:todayISO(),endDate:"",isAllDay:true,startTime:"",endTime:"",category:"personal",color:"#6c63ff",location:"" }; }
 
-export default function CalendarApp() {
+export default function CalendarApp({ user }) {
   const [year, setYear]           = useState(new Date().getFullYear());
   const [month, setMonth]         = useState(new Date().getMonth()+1);
   const [events, setEvents]       = useState([]);
@@ -79,13 +80,7 @@ export default function CalendarApp() {
 
   return (
     <div className="app-page">
-      <nav className="app-nav">
-        <Link href="/dashboard" className="app-nav-back">←</Link>
-        <h2>Calendar</h2>
-        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:"0.5rem"}}>
-          <ThemePicker />
-        </div>
-      </nav>
+      <AppNav user={user} title="Calendar" />
 
       <div className="tabs">
         {[{key:"month",label:"Month"},{key:"upcoming",label:"Upcoming"}].map(t=>(
@@ -220,7 +215,17 @@ export default function CalendarApp() {
 }
 
 export async function getServerSideProps(ctx) {
-  const user = getAuthUser(ctx.req);
-  if (!user) return { redirect: { destination: "/login", permanent: false } };
-  return { props: {} };
+  const decoded = getAuthUser(ctx.req);
+  if (!decoded) return { redirect: { destination: "/login", permanent: false } };
+  try {
+    await connectDB();
+    const dbUser = await User.findById(decoded.userId).lean();
+    if (!dbUser) return { redirect: { destination: "/login", permanent: false } };
+    if (dbUser.role === "admin") return { props: { user: { id: dbUser._id.toString(), name: dbUser.name, email: dbUser.email, role: "admin" } } };
+    const allowedApps = dbUser.allowedApps?.length ? dbUser.allowedApps : ["expenses","health","habits","notes","goals","calendar","reports","calculators"];
+    if (!allowedApps.includes("calendar")) return { redirect: { destination: "/dashboard", permanent: false } };
+    return { props: { user: { id: dbUser._id.toString(), name: dbUser.name, email: dbUser.email, role: dbUser.role || "user" } } };
+  } catch {
+    return { redirect: { destination: "/login", permanent: false } };
+  }
 }

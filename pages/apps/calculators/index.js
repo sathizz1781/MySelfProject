@@ -1,6 +1,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { getAuthUser } from "../../../lib/auth";
+import connectDB from "../../../lib/mongodb";
+import User from "../../../models/User";
 import ThemePicker from "../../../components/ThemePicker";
 
 function fmtINR(n) {
@@ -532,7 +534,18 @@ export default function CalculatorsPage() {
 }
 
 export async function getServerSideProps(ctx) {
-  const user = getAuthUser(ctx.req);
-  if (!user) return { redirect: { destination: "/login", permanent: false } };
-  return { props: {} };
+  const decoded = getAuthUser(ctx.req);
+  if (!decoded) return { redirect: { destination: "/login", permanent: false } };
+  try {
+    await connectDB();
+    const dbUser = await User.findById(decoded.userId).lean();
+    if (!dbUser) return { redirect: { destination: "/login", permanent: false } };
+    if (dbUser.role === "admin") return { props: {} };
+    const ALL_APPS = ["expenses","health","habits","notes","goals","calendar","reports","calculators"];
+    const allowedApps = dbUser.allowedApps?.length ? dbUser.allowedApps : ALL_APPS;
+    if (!allowedApps.includes("calculators")) return { redirect: { destination: "/dashboard", permanent: false } };
+    return { props: {} };
+  } catch {
+    return { redirect: { destination: "/login", permanent: false } };
+  }
 }

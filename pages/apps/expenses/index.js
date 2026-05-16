@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from "react";
-import Link from "next/link";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, PieChart, Pie, Cell,
@@ -18,7 +17,9 @@ import { getAuthUser } from "../../../lib/auth";
 import {
   EXPENSE_CATEGORIES, INCOME_CATEGORIES, getCategoryMeta, CHART_COLORS,
 } from "../../../lib/categories";
-import ThemePicker from "../../../components/ThemePicker";
+import AppNav from "../../../components/AppNav";
+import connectDB from "../../../lib/mongodb";
+import User from "../../../models/User";
 
 // ─── Icon map ────────────────────────────────────────────────────────────────
 const ICON_MAP = {
@@ -120,7 +121,7 @@ function initLoanForm() {
 }
 
 function initChitForm() {
-  return { name: "", organizer: "", groupSize: "", monthlyContribution: "", duration: "", startDate: todayISO(), currency: "INR", notes: "" };
+  return { name: "", organizer: "", groupSize: "", monthlyContribution: "", totalChitAmount: "", contributionFrequencyMonths: 1, duration: "", startDate: todayISO(), currency: "INR", notes: "" };
 }
 
 function initInvestForm() {
@@ -143,7 +144,7 @@ const INVEST_TYPES = [
 const LOAN_PURPOSES = ["home", "car", "personal", "education", "business", "gold", "other"];
 
 // ─── Main Component ───────────────────────────────────────────────────────────
-export default function ExpenseApp() {
+export default function ExpenseApp({ user }) {
   const [activeTab, setActiveTab] = useState("overview");
   const [showMoreDrawer, setShowMoreDrawer] = useState(false);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
@@ -275,6 +276,7 @@ export default function ExpenseApp() {
   const [payChit, setPayChit] = useState(null);
   const [chitPayForm, setChitPayForm] = useState({ month: currentMonth(), amount: "", dividend: "0", paidOn: todayISO(), notes: "" });
   const [chitPaySaving, setChitPaySaving] = useState(false);
+  const [expandedChitPayments, setExpandedChitPayments] = useState({});
   const [showPotModal, setShowPotModal] = useState(false);
   const [potChit, setPotChit] = useState(null);
   const [potForm, setPotForm] = useState({ potMonth: "1", potAmount: "", potReceived: true });
@@ -652,7 +654,7 @@ export default function ExpenseApp() {
   function openAddChit() { setEditChit(null); setChitForm(initChitForm()); setChitError(""); setShowChitModal(true); }
   function openEditChit(c) {
     setEditChit(c);
-    setChitForm({ name: c.name, organizer: c.organizer || "", groupSize: String(c.groupSize), monthlyContribution: String(c.monthlyContribution), duration: String(c.duration), startDate: c.startDate?.slice(0, 10) || todayISO(), currency: c.currency || "INR", notes: c.notes || "" });
+    setChitForm({ name: c.name, organizer: c.organizer || "", groupSize: String(c.groupSize), monthlyContribution: String(c.monthlyContribution), totalChitAmount: String(c.groupSize * c.monthlyContribution), contributionFrequencyMonths: c.contributionFrequencyMonths || 1, duration: String(c.duration), startDate: c.startDate?.slice(0, 10) || todayISO(), currency: c.currency || "INR", notes: c.notes || "" });
     setChitError(""); setShowChitModal(true);
   }
   async function saveChit() {
@@ -662,7 +664,7 @@ export default function ExpenseApp() {
     try {
       const url = editChit ? `/api/chit-funds/${editChit._id}` : "/api/chit-funds";
       const method = editChit ? "PUT" : "POST";
-      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...chitForm, groupSize: Number(chitForm.groupSize), monthlyContribution: Number(chitForm.monthlyContribution), duration: Number(chitForm.duration) }) });
+      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...chitForm, groupSize: Number(chitForm.groupSize), monthlyContribution: Number(chitForm.monthlyContribution), contributionFrequencyMonths: Number(chitForm.contributionFrequencyMonths || 1), duration: Number(chitForm.duration) }) });
       if (res.ok) { setShowChitModal(false); fetchChits(); }
       else setChitError((await res.json()).error || "Failed.");
     } finally { setChitSaving(false); }
@@ -672,22 +674,33 @@ export default function ExpenseApp() {
     await fetch(`/api/chit-funds/${id}`, { method: "DELETE" });
     fetchChits();
   }
+  async function deleteChitPayment(chitId, month) {
+    if (!confirm(`Delete payment for ${month}?`)) return;
+    await fetch(`/api/chit-funds/${chitId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ deleteMonth: month }) });
+    fetchChits();
+  }
   function openPayChit(c) {
     setPayChit(c);
-    setChitPayForm({ month: currentMonth(), amount: String(c.monthlyContribution), dividend: "0", paidOn: todayISO(), notes: "" });
+    setChitPayForm({ month: currentMonth(), amount: "", dividend: "0", paidOn: todayISO(), notes: "" });
     setShowPayChitModal(true);
   }
   async function saveChitPayment() {
     setChitPaySaving(true);
     try {
-      const res = await fetch(`/api/chit-funds/${payChit._id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...chitPayForm, amount: Number(chitPayForm.amount), dividend: Number(chitPayForm.dividend || 0) }) });
+      const netPaid  = Number(chitPayForm.amount);
+      const std      = payChit.monthlyContribution;
+      const dividend = Math.max(0, std - netPaid);
+      const res = await fetch(`/api/chit-funds/${payChit._id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...chitPayForm, amount: std, dividend }) });
       if (res.ok) { setShowPayChitModal(false); fetchChits(); }
     } finally { setChitPaySaving(false); }
   }
   function openPotModal(c) {
     setPotChit(c);
+    const freq = c.contributionFrequencyMonths || 1;
+    const totalTerms = Math.round(c.duration / freq);
     const monthsElapsed = Math.ceil((Date.now() - new Date(c.startDate)) / (1000 * 60 * 60 * 24 * 30));
-    setPotForm({ potReceived: true, potMonth: String(Math.min(Math.max(1, monthsElapsed), c.duration)), potAmount: String(c.groupSize * c.monthlyContribution) });
+    const termElapsed = Math.ceil(monthsElapsed / freq);
+    setPotForm({ potReceived: true, potMonth: String(Math.min(Math.max(1, termElapsed), totalTerms)), potAmount: String(c.groupSize * c.monthlyContribution) });
     setShowPotModal(true);
   }
   async function savePot() {
@@ -975,18 +988,13 @@ export default function ExpenseApp() {
   return (
     <div className="app-page">
       {/* Nav */}
-      <nav className="app-nav">
-        <Link href="/dashboard" className="app-nav-back">←</Link>
-        <h2>Expense Tracker</h2>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginLeft: "auto" }}>
-          {inGroup && (
-            <span className="group-badge">
-              <Users size={11} /> {stats.groupName}
-            </span>
-          )}
-          <ThemePicker />
-        </div>
-      </nav>
+      <AppNav user={user} title="Expense Tracker">
+        {inGroup && (
+          <span className="group-badge">
+            <Users size={11} /> {stats.groupName}
+          </span>
+        )}
+      </AppNav>
 
       {/* Tabs */}
       <div className="tabs">
@@ -2277,9 +2285,11 @@ export default function ExpenseApp() {
                 const totalIn    = totalPaid - totalDiv;
                 const totalOut   = c.potReceived ? c.potAmount : 0;
                 const pnl        = totalOut + totalDiv - totalPaid;
-                const monthsDone = c.payments.length;
-                const progress   = Math.round((monthsDone / c.duration) * 100);
-                const remaining  = (c.duration - monthsDone) * c.monthlyContribution;
+                const freq       = c.contributionFrequencyMonths || 1;
+                const totalTerms = Math.round(c.duration / freq);
+                const termsDone  = c.payments.length;
+                const progress   = Math.round((termsDone / totalTerms) * 100);
+                const remaining  = (totalTerms - termsDone) * c.monthlyContribution;
                 return (
                   <div key={c._id} style={{ background: "var(--surface2)", borderRadius: "var(--radius)", padding: "1rem" }}>
                     {/* Header */}
@@ -2299,13 +2309,13 @@ export default function ExpenseApp() {
 
                     {/* Scheme details */}
                     <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "0.6rem" }}>
-                      {c.groupSize} members · ₹{c.monthlyContribution.toLocaleString("en-IN")}/month · Pool ₹{pool.toLocaleString("en-IN")} · {c.duration} months
+                      {c.groupSize} members · ₹{c.monthlyContribution.toLocaleString("en-IN")}/{c.contributionFrequencyMonths > 1 ? `${c.contributionFrequencyMonths}mo` : "month"} · Pool ₹{pool.toLocaleString("en-IN")} · {c.duration} months
                     </div>
 
                     {/* Progress bar */}
                     <div style={{ marginBottom: "0.6rem" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.7rem", color: "var(--text-muted)", marginBottom: "0.25rem" }}>
-                        <span>Month {monthsDone} of {c.duration}</span>
+                        <span>Term {termsDone} of {totalTerms}</span>
                         <span>{progress}%</span>
                       </div>
                       <div style={{ height: 5, background: "var(--border)", borderRadius: 4, overflow: "hidden" }}>
@@ -2345,13 +2355,39 @@ export default function ExpenseApp() {
                     </div>
                     {remaining > 0 && (
                       <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: "0.6rem" }}>
-                        Remaining contributions: {fmt(remaining, c.currency)} ({c.duration - monthsDone} months)
+                        Remaining contributions: {fmt(remaining, c.currency)} ({totalTerms - termsDone} terms · {(totalTerms - termsDone) * freq} months)
                       </div>
                     )}
 
-                    <button className="btn btn-ghost" style={{ width: "auto", padding: "0.35rem 0.85rem", fontSize: "0.78rem", marginTop: 0 }} onClick={() => openPayChit(c)}>
-                      + Record Payment
-                    </button>
+                    <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                      <button className="btn btn-ghost" style={{ width: "auto", padding: "0.35rem 0.85rem", fontSize: "0.78rem", marginTop: 0 }} onClick={() => openPayChit(c)}>
+                        + Record Payment
+                      </button>
+                      {c.payments.length > 0 && (
+                        <button
+                          onClick={() => setExpandedChitPayments(s => ({ ...s, [c._id]: !s[c._id] }))}
+                          style={{ fontSize: "0.75rem", color: "var(--text-muted)", background: "none", border: "none", cursor: "pointer", padding: "0.35rem 0.5rem", display: "flex", alignItems: "center", gap: "0.25rem" }}
+                        >
+                          <ChevronDown size={13} style={{ transform: expandedChitPayments[c._id] ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} />
+                          {c.payments.length} payment{c.payments.length !== 1 ? "s" : ""}
+                        </button>
+                      )}
+                    </div>
+
+                    {expandedChitPayments[c._id] && c.payments.length > 0 && (
+                      <div style={{ marginTop: "0.75rem", borderTop: "1px solid var(--border)", paddingTop: "0.6rem", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                        {[...c.payments].sort((a, b) => a.month.localeCompare(b.month)).map(p => (
+                          <div key={p.month} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.75rem", padding: "0.35rem 0.5rem", background: "var(--surface)", borderRadius: 6 }}>
+                            <span style={{ fontWeight: 600, color: "var(--text-muted)", minWidth: 60 }}>{p.month}</span>
+                            <span style={{ fontWeight: 600 }}>{fmt(p.amount, c.currency)}</span>
+                            {p.dividend > 0 && <span style={{ color: "var(--success)" }}>+{fmt(p.dividend, c.currency)} div</span>}
+                            <span style={{ color: "var(--text-muted)" }}>· {new Date(p.paidOn).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "2-digit" })}</span>
+                            {p.notes && <span style={{ color: "var(--text-muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.notes}</span>}
+                            <button className="icon-btn" style={{ marginLeft: "auto", flexShrink: 0 }} onClick={() => deleteChitPayment(c._id, p.month)}><Trash2 size={11} /></button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -3232,17 +3268,83 @@ export default function ExpenseApp() {
             </div>
             <div style={{ display: "flex", gap: "0.5rem" }}>
               <div className="form-group" style={{ flex: 1 }}>
-                <label className="form-label">Group Size (members)</label>
-                <input className="form-input" type="number" min="2" placeholder="20" value={chitForm.groupSize} onChange={e => setChitForm(f => ({ ...f, groupSize: e.target.value, duration: e.target.value }))} />
+                <label className="form-label">Members</label>
+                <input className="form-input" type="number" min="2" placeholder="20" value={chitForm.groupSize}
+                  onChange={e => {
+                    const members = e.target.value;
+                    setChitForm(f => {
+                      const contrib = Number(f.monthlyContribution) || 0;
+                      const total = contrib && members ? String((Number(members) * contrib).toFixed(0)) : f.totalChitAmount || "";
+                      const freq = Number(f.contributionFrequencyMonths) || 1;
+                      const duration = members ? String(Number(members) * freq) : "";
+                      return { ...f, groupSize: members, duration, totalChitAmount: total };
+                    });
+                  }} />
               </div>
               <div className="form-group" style={{ flex: 1 }}>
-                <label className="form-label">Monthly Contribution (₹)</label>
-                <input className="form-input" type="number" min="1" placeholder="5000" value={chitForm.monthlyContribution} onChange={e => setChitForm(f => ({ ...f, monthlyContribution: e.target.value }))} />
+                <label className="form-label">Contribution / member</label>
+                <input className="form-input" type="number" min="1" placeholder="5000" value={chitForm.monthlyContribution}
+                  onChange={e => {
+                    const contrib = e.target.value;
+                    setChitForm(f => {
+                      const members = Number(f.groupSize) || 0;
+                      const total = contrib && members ? String((members * Number(contrib)).toFixed(0)) : f.totalChitAmount || "";
+                      return { ...f, monthlyContribution: contrib, totalChitAmount: total };
+                    });
+                  }} />
+              </div>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label className="form-label">Total Chit Amount</label>
+                <input className="form-input" type="number" min="1" placeholder="100000" value={chitForm.totalChitAmount || ""}
+                  onChange={e => {
+                    const total = e.target.value;
+                    setChitForm(f => {
+                      const members = Number(f.groupSize) || 0;
+                      const contrib = total && members ? String((Number(total) / members).toFixed(0)) : f.monthlyContribution || "";
+                      return { ...f, totalChitAmount: total, monthlyContribution: contrib };
+                    });
+                  }} />
+              </div>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Contribution Frequency</label>
+              <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+                {[{ v: 1, label: "Monthly" }, { v: 2, label: "Bi-Monthly" }, { v: 3, label: "Quarterly" }].map(({ v, label }) => (
+                  <button key={v} type="button"
+                    onClick={() => setChitForm(f => {
+                      const members = Number(f.groupSize) || 0;
+                      const duration = members ? String(members * v) : f.duration;
+                      return { ...f, contributionFrequencyMonths: v, duration };
+                    })}
+                    style={{
+                      padding: "0.3rem 0.75rem", fontSize: "0.78rem", borderRadius: 8, border: "1px solid",
+                      cursor: "pointer", fontWeight: 600,
+                      background: Number(chitForm.contributionFrequencyMonths) === v ? "var(--accent)" : "var(--surface2)",
+                      borderColor: Number(chitForm.contributionFrequencyMonths) === v ? "var(--accent)" : "var(--border)",
+                      color: Number(chitForm.contributionFrequencyMonths) === v ? "#fff" : "var(--text-muted)",
+                    }}
+                  >{label}</button>
+                ))}
+                <div style={{ display: "flex", alignItems: "center", gap: "0.3rem" }}>
+                  <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>Every</span>
+                  <input
+                    className="form-input" type="number" min="1" max="12"
+                    style={{ width: 56, padding: "0.28rem 0.4rem", fontSize: "0.82rem", textAlign: "center" }}
+                    value={chitForm.contributionFrequencyMonths}
+                    onChange={e => setChitForm(f => {
+                      const freq = Math.max(1, Number(e.target.value) || 1);
+                      const members = Number(f.groupSize) || 0;
+                      const duration = members ? String(members * freq) : f.duration;
+                      return { ...f, contributionFrequencyMonths: freq, duration };
+                    })}
+                  />
+                  <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>month{Number(chitForm.contributionFrequencyMonths) !== 1 ? "s" : ""}</span>
+                </div>
               </div>
             </div>
             <div style={{ display: "flex", gap: "0.5rem" }}>
               <div className="form-group" style={{ flex: 1 }}>
-                <label className="form-label">Duration (months)</label>
+                <label className="form-label">Duration (months) <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)" }}>= members × frequency</span></label>
                 <input className="form-input" type="number" min="1" value={chitForm.duration} onChange={e => setChitForm(f => ({ ...f, duration: e.target.value }))} />
               </div>
               <div className="form-group" style={{ flex: 1 }}>
@@ -3250,11 +3352,6 @@ export default function ExpenseApp() {
                 <input className="form-input" type="date" value={chitForm.startDate} onChange={e => setChitForm(f => ({ ...f, startDate: e.target.value }))} />
               </div>
             </div>
-            {chitForm.groupSize && chitForm.monthlyContribution && (
-              <div style={{ fontSize: "0.78rem", color: "var(--success)", marginBottom: "0.75rem", fontWeight: 600 }}>
-                Pool per month: ₹{(Number(chitForm.groupSize) * Number(chitForm.monthlyContribution)).toLocaleString("en-IN")}
-              </div>
-            )}
             <div className="form-group">
               <label className="form-label">Notes <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span></label>
               <input className="form-input" placeholder="Any details…" value={chitForm.notes} onChange={e => setChitForm(f => ({ ...f, notes: e.target.value }))} />
@@ -3266,42 +3363,77 @@ export default function ExpenseApp() {
       )}
 
       {/* Record payment modal */}
-      {showPayChitModal && payChit && (
-        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowPayChitModal(false)}>
-          <div className="modal" style={{ maxWidth: 420 }}>
-            <div className="modal-title">
-              <span>Record Payment — {payChit.name}</span>
-              <button className="icon-btn" onClick={() => setShowPayChitModal(false)}>✕</button>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Month</label>
-              <input className="form-input" type="month" value={chitPayForm.month} onChange={e => setChitPayForm(f => ({ ...f, month: e.target.value }))} />
-            </div>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              <div className="form-group" style={{ flex: 1 }}>
-                <label className="form-label">Amount Paid (₹)</label>
-                <input className="form-input" type="number" min="0" value={chitPayForm.amount} onChange={e => setChitPayForm(f => ({ ...f, amount: e.target.value }))} />
+      {showPayChitModal && payChit && (() => {
+        const std      = payChit.monthlyContribution;
+        const netPaid  = Number(chitPayForm.amount) || 0;
+        const discount = netPaid > 0 ? Math.max(0, std - netPaid) : 0;
+        return (
+          <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowPayChitModal(false)}>
+            <div className="modal" style={{ maxWidth: 380 }}>
+              <div className="modal-title">
+                <span>Record Payment — {payChit.name}</span>
+                <button className="icon-btn" onClick={() => setShowPayChitModal(false)}>✕</button>
               </div>
-              <div className="form-group" style={{ flex: 1 }}>
-                <label className="form-label">Dividend Received (₹)</label>
-                <input className="form-input" type="number" min="0" value={chitPayForm.dividend} onChange={e => setChitPayForm(f => ({ ...f, dividend: e.target.value }))} />
+
+              <div className="form-group">
+                <label className="form-label">Term (Month)</label>
+                <input className="form-input" type="month" value={chitPayForm.month} onChange={e => setChitPayForm(f => ({ ...f, month: e.target.value }))} />
               </div>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Paid On</label>
-              <input className="form-input" type="date" value={chitPayForm.paidOn} onChange={e => setChitPayForm(f => ({ ...f, paidOn: e.target.value }))} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Notes <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span></label>
-              <input className="form-input" placeholder="e.g. paid via bank transfer" value={chitPayForm.notes} onChange={e => setChitPayForm(f => ({ ...f, notes: e.target.value }))} />
-            </div>
-            <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
-              <button className="btn btn-ghost" style={{ width: "auto" }} onClick={() => setShowPayChitModal(false)}>Cancel</button>
-              <button className="btn" style={{ width: "auto" }} onClick={saveChitPayment} disabled={chitPaySaving}>{chitPaySaving ? "Saving…" : "Save Payment"}</button>
+
+              <div className="form-group">
+                <label className="form-label">
+                  Amount You Actually Paid
+                  <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)", marginLeft: "0.4rem" }}>
+                    (standard: ₹{std.toLocaleString("en-IN")})
+                  </span>
+                </label>
+                <input
+                  className="form-input" type="number" min="0"
+                  placeholder={String(std)}
+                  value={chitPayForm.amount}
+                  onChange={e => setChitPayForm(f => ({ ...f, amount: e.target.value }))}
+                />
+              </div>
+
+              {/* Auto-calculated discount summary */}
+              <div style={{
+                background: discount > 0 ? "rgba(16,185,129,0.08)" : "var(--surface2)",
+                border: `1px solid ${discount > 0 ? "rgba(16,185,129,0.3)" : "var(--border)"}`,
+                borderRadius: 8, padding: "0.6rem 0.85rem", marginBottom: "0.85rem",
+                display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.5rem", textAlign: "center",
+              }}>
+                <div>
+                  <div style={{ fontSize: "0.65rem", color: "var(--text-muted)", marginBottom: "0.2rem" }}>Standard</div>
+                  <div style={{ fontWeight: 700, fontSize: "0.85rem" }}>₹{std.toLocaleString("en-IN")}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: "0.65rem", color: "var(--text-muted)", marginBottom: "0.2rem" }}>You Paid</div>
+                  <div style={{ fontWeight: 700, fontSize: "0.85rem" }}>₹{netPaid > 0 ? netPaid.toLocaleString("en-IN") : "—"}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: "0.65rem", color: discount > 0 ? "var(--success)" : "var(--text-muted)", marginBottom: "0.2rem" }}>Discount</div>
+                  <div style={{ fontWeight: 700, fontSize: "0.85rem", color: discount > 0 ? "var(--success)" : "var(--text-muted)" }}>
+                    {discount > 0 ? `+₹${discount.toLocaleString("en-IN")}` : "₹0"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Paid On</label>
+                <input className="form-input" type="date" value={chitPayForm.paidOn} onChange={e => setChitPayForm(f => ({ ...f, paidOn: e.target.value }))} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Notes <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span></label>
+                <input className="form-input" placeholder="e.g. paid via bank transfer" value={chitPayForm.notes} onChange={e => setChitPayForm(f => ({ ...f, notes: e.target.value }))} />
+              </div>
+              <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+                <button className="btn btn-ghost" style={{ width: "auto" }} onClick={() => setShowPayChitModal(false)}>Cancel</button>
+                <button className="btn" style={{ width: "auto" }} onClick={saveChitPayment} disabled={chitPaySaving}>{chitPaySaving ? "Saving…" : "Save Payment"}</button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Pot received modal */}
       {showPotModal && potChit && (
@@ -3317,7 +3449,7 @@ export default function ExpenseApp() {
             <div style={{ display: "flex", gap: "0.5rem" }}>
               <div className="form-group" style={{ flex: 1 }}>
                 <label className="form-label">Month Number</label>
-                <input className="form-input" type="number" min="1" max={potChit.duration} value={potForm.potMonth} onChange={e => setPotForm(f => ({ ...f, potMonth: e.target.value }))} />
+                <input className="form-input" type="number" min="1" max={Math.round(potChit.duration / (potChit.contributionFrequencyMonths || 1))} value={potForm.potMonth} onChange={e => setPotForm(f => ({ ...f, potMonth: e.target.value }))} />
               </div>
               <div className="form-group" style={{ flex: 1 }}>
                 <label className="form-label">Amount Received (₹)</label>
@@ -3392,7 +3524,17 @@ export default function ExpenseApp() {
 }
 
 export async function getServerSideProps(ctx) {
-  const user = getAuthUser(ctx.req);
-  if (!user) return { redirect: { destination: "/login", permanent: false } };
-  return { props: {} };
+  const decoded = getAuthUser(ctx.req);
+  if (!decoded) return { redirect: { destination: "/login", permanent: false } };
+  try {
+    await connectDB();
+    const dbUser = await User.findById(decoded.userId).lean();
+    if (!dbUser) return { redirect: { destination: "/login", permanent: false } };
+    if (dbUser.role === "admin") return { props: { user: { id: dbUser._id.toString(), name: dbUser.name, email: dbUser.email, role: "admin" } } };
+    const allowedApps = dbUser.allowedApps?.length ? dbUser.allowedApps : ["expenses","health","habits","notes","goals","calendar","reports","calculators"];
+    if (!allowedApps.includes("expenses")) return { redirect: { destination: "/dashboard", permanent: false } };
+    return { props: { user: { id: dbUser._id.toString(), name: dbUser.name, email: dbUser.email, role: dbUser.role || "user" } } };
+  } catch {
+    return { redirect: { destination: "/login", permanent: false } };
+  }
 }

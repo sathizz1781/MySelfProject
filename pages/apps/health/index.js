@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
-import Link from "next/link";
 import { Activity, Heart, Footprints, Flame, Timer, Weight } from "lucide-react";
 import { getAuthUser } from "../../../lib/auth";
-import ThemePicker from "../../../components/ThemePicker";
+import AppNav from "../../../components/AppNav";
+import connectDB from "../../../lib/mongodb";
+import User from "../../../models/User";
 
 const WORKOUT_TYPES = ["running","cycling","gym","yoga","swimming","walking","other"];
 const WORKOUT_ICONS = { running:"🏃",cycling:"🚴",gym:"🏋️",yoga:"🧘",swimming:"🏊",walking:"🚶",other:"⚡" };
@@ -13,7 +14,7 @@ function initForm() {
   return { type:"workout", date:todayISO(), workoutType:"running", duration:"", calories:"", distance:"", weight:"", bpSystolic:"", bpDiastolic:"", heartRate:"", steps:"", sleepHours:"", notes:"" };
 }
 
-export default function HealthApp() {
+export default function HealthApp({ user }) {
   const [activeTab, setActiveTab]   = useState("overview");
   const [entries, setEntries]       = useState([]);
   const [loading, setLoading]       = useState(true);
@@ -73,11 +74,7 @@ export default function HealthApp() {
 
   return (
     <div className="app-page">
-      <nav className="app-nav">
-        <Link href="/dashboard" className="app-nav-back">←</Link>
-        <h2>Health</h2>
-        <div style={{marginLeft:"auto"}}><ThemePicker /></div>
-      </nav>
+      <AppNav user={user} title="Health" />
 
       <div className="tabs">
         {TABS.map(t => <button key={t.key} className={`tab ${activeTab===t.key?"active":""}`} onClick={()=>setActiveTab(t.key)}>{t.label}</button>)}
@@ -259,7 +256,17 @@ export default function HealthApp() {
 }
 
 export async function getServerSideProps(ctx) {
-  const user = getAuthUser(ctx.req);
-  if (!user) return { redirect: { destination: "/login", permanent: false } };
-  return { props: {} };
+  const decoded = getAuthUser(ctx.req);
+  if (!decoded) return { redirect: { destination: "/login", permanent: false } };
+  try {
+    await connectDB();
+    const dbUser = await User.findById(decoded.userId).lean();
+    if (!dbUser) return { redirect: { destination: "/login", permanent: false } };
+    if (dbUser.role === "admin") return { props: { user: { id: dbUser._id.toString(), name: dbUser.name, email: dbUser.email, role: "admin" } } };
+    const allowedApps = dbUser.allowedApps?.length ? dbUser.allowedApps : ["expenses","health","habits","notes","goals","calendar","reports","calculators"];
+    if (!allowedApps.includes("health")) return { redirect: { destination: "/dashboard", permanent: false } };
+    return { props: { user: { id: dbUser._id.toString(), name: dbUser.name, email: dbUser.email, role: dbUser.role || "user" } } };
+  } catch {
+    return { redirect: { destination: "/login", permanent: false } };
+  }
 }

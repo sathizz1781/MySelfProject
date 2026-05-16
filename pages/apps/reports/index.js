@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
-import Link from "next/link";
 import {
   BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
 import { Download, FileText, TrendingUp, TrendingDown, Wallet } from "lucide-react";
 import { getAuthUser } from "../../../lib/auth";
-import ThemePicker from "../../../components/ThemePicker";
+import AppNav from "../../../components/AppNav";
+import connectDB from "../../../lib/mongodb";
+import User from "../../../models/User";
 
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const CHART_COLORS = ["#6c63ff","#f97316","#10b981","#f59e0b","#ec4899","#0ea5e9","#8b5cf6","#ef4444","#34d399","#fbbf24"];
@@ -14,7 +15,7 @@ const CHART_COLORS = ["#6c63ff","#f97316","#10b981","#f59e0b","#ec4899","#0ea5e9
 const fmt  = (n) => "₹" + Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 });
 const fmtD = (d) => new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 
-export default function ReportsPage() {
+export default function ReportsPage({ user }) {
   const [year, setYear]   = useState(new Date().getFullYear());
   const [month, setMonth] = useState(new Date().getMonth() + 1);
   const [loading, setLoading] = useState(false);
@@ -67,13 +68,7 @@ export default function ReportsPage() {
   return (
     <div className="app-page">
       {/* Nav */}
-      <nav className="app-nav no-print">
-        <Link href="/dashboard" className="app-nav-back">←</Link>
-        <h2>Reports</h2>
-        <div style={{ marginLeft: "auto", display: "flex", gap: "0.5rem", alignItems: "center" }}>
-          <ThemePicker />
-        </div>
-      </nav>
+      <AppNav user={user} title="Reports" className="no-print" />
 
       {/* Controls */}
       <div className="tab-content no-print" style={{ paddingBottom: 0 }}>
@@ -310,7 +305,17 @@ function TxTable({ rows, amtColor, sign }) {
 }
 
 export async function getServerSideProps(ctx) {
-  const user = getAuthUser(ctx.req);
-  if (!user) return { redirect: { destination: "/login", permanent: false } };
-  return { props: {} };
+  const decoded = getAuthUser(ctx.req);
+  if (!decoded) return { redirect: { destination: "/login", permanent: false } };
+  try {
+    await connectDB();
+    const dbUser = await User.findById(decoded.userId).lean();
+    if (!dbUser) return { redirect: { destination: "/login", permanent: false } };
+    if (dbUser.role === "admin") return { props: { user: { id: dbUser._id.toString(), name: dbUser.name, email: dbUser.email, role: "admin" } } };
+    const allowedApps = dbUser.allowedApps?.length ? dbUser.allowedApps : ["expenses","health","habits","notes","goals","calendar","reports","calculators"];
+    if (!allowedApps.includes("reports")) return { redirect: { destination: "/dashboard", permanent: false } };
+    return { props: { user: { id: dbUser._id.toString(), name: dbUser.name, email: dbUser.email, role: dbUser.role || "user" } } };
+  } catch {
+    return { redirect: { destination: "/login", permanent: false } };
+  }
 }

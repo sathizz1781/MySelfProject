@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { useRouter } from "next/router";
+import { useState, useEffect, useRef } from "react";
 import {
   Hexagon,
   Wallet,
@@ -93,6 +94,17 @@ const APPS = [
 
 export default function Dashboard({ user }) {
   const router = useRouter();
+  const allowedApps = user.allowedApps || APPS.map(a => a.key);
+  const [dropOpen, setDropOpen] = useState(false);
+  const dropRef = useRef(null);
+
+  useEffect(() => {
+    function onClickOutside(e) {
+      if (dropRef.current && !dropRef.current.contains(e.target)) setDropOpen(false);
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
 
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -117,14 +129,60 @@ export default function Dashboard({ user }) {
         </div>
         <div className="topbar-user">
           <ThemePicker />
-          <button
-            className="btn btn-ghost"
-            style={{ width: "auto", padding: "0.38rem 0.85rem", marginTop: 0, fontSize: "0.8rem" }}
-            onClick={handleLogout}
-          >
-            Sign out
-          </button>
-          <div className="avatar">{initials}</div>
+          <div ref={dropRef} style={{ position: "relative" }}>
+            <button
+              onClick={() => setDropOpen(o => !o)}
+              title={user.name}
+              style={{
+                width: 34, height: 34, borderRadius: "50%",
+                background: "var(--accent)", color: "#fff",
+                border: "2px solid transparent",
+                outline: dropOpen ? "2px solid var(--accent)" : "none",
+                cursor: "pointer", fontWeight: 700, fontSize: "0.72rem",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                flexShrink: 0, transition: "outline 0.15s",
+              }}
+            >{initials}</button>
+
+            {dropOpen && (
+              <div style={{
+                position: "absolute", top: "calc(100% + 8px)", right: 0,
+                minWidth: 190, background: "var(--surface2)",
+                border: "1px solid var(--border)", borderRadius: "var(--radius)",
+                boxShadow: "0 8px 28px rgba(0,0,0,0.35)", zIndex: 200, overflow: "hidden",
+              }}>
+                <div style={{ padding: "0.65rem 0.9rem", borderBottom: "1px solid var(--border)" }}>
+                  <div style={{ fontWeight: 700, fontSize: "0.83rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{user.name}</div>
+                  <div style={{ fontSize: "0.69rem", color: "var(--text-muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{user.email}</div>
+                  {user.role === "admin" && (
+                    <span style={{ fontSize: "0.6rem", fontWeight: 700, color: "var(--accent-light)", background: "rgba(108,99,255,0.15)", borderRadius: 4, padding: "0.1rem 0.35rem", display: "inline-block", marginTop: "0.2rem" }}>ADMIN</span>
+                  )}
+                </div>
+                <Link href="/profile" onClick={() => setDropOpen(false)}
+                  style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.55rem 0.9rem", fontSize: "0.82rem", color: "var(--text)", textDecoration: "none" }}
+                  onMouseEnter={e => e.currentTarget.style.background = "var(--surface)"}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                >Profile</Link>
+                {user.role === "admin" && (
+                  <Link href="/admin" onClick={() => setDropOpen(false)}
+                    style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.55rem 0.9rem", fontSize: "0.82rem", color: "var(--accent-light)", textDecoration: "none" }}
+                    onMouseEnter={e => e.currentTarget.style.background = "var(--surface)"}
+                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                  >Admin Panel</Link>
+                )}
+                <button onClick={handleLogout}
+                  style={{
+                    display: "block", width: "100%", textAlign: "left",
+                    padding: "0.55rem 0.9rem", fontSize: "0.82rem",
+                    background: "none", border: "none", borderTop: "1px solid var(--border)",
+                    color: "var(--error)", cursor: "pointer",
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = "rgba(248,113,113,0.08)"}
+                  onMouseLeave={e => e.currentTarget.style.background = "none"}
+                >Sign Out</button>
+              </div>
+            )}
+          </div>
         </div>
       </nav>
 
@@ -150,7 +208,8 @@ export default function Dashboard({ user }) {
         <div className="apps-grid">
           {APPS.map((app) => {
             const IconComponent = app.icon;
-            return app.live ? (
+            const hasAccess = allowedApps.includes(app.key);
+            return app.live && hasAccess ? (
               <Link key={app.key} href={app.href} className="app-icon-card">
                 <div
                   className="app-icon"
@@ -172,7 +231,7 @@ export default function Dashboard({ user }) {
                   <IconComponent size={26} color="var(--text-muted)" strokeWidth={2} />
                 </div>
                 <span className="app-icon-name">{app.name}</span>
-                <span className="app-coming-soon">Coming soon</span>
+                <span className="app-coming-soon">{app.live && !hasAccess ? "No access" : "Coming soon"}</span>
               </div>
             );
           })}
@@ -191,9 +250,14 @@ export async function getServerSideProps(ctx) {
     await connectDB();
     const user = await User.findById(decoded.userId).lean();
     if (!user) return { redirect: { destination: "/login", permanent: false } };
+    const ALL_APPS = ["expenses", "health", "habits", "notes", "goals", "calendar", "reports", "calculators"];
+    const isAdmin = user.role === "admin";
     return {
       props: {
-        user: { id: user._id.toString(), name: user.name, email: user.email },
+        user: {
+          id: user._id.toString(), name: user.name, email: user.email, role: user.role || "user",
+          allowedApps: isAdmin || !user.allowedApps?.length ? ALL_APPS : user.allowedApps,
+        },
       },
     };
   } catch {

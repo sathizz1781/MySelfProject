@@ -16,19 +16,20 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "POST") {
-    const { name, organizer, groupSize, monthlyContribution, duration, startDate, currency, notes } = req.body;
+    const { name, organizer, groupSize, monthlyContribution, contributionFrequencyMonths, duration, startDate, currency, notes } = req.body;
     if (!name || !groupSize || !monthlyContribution || !duration || !startDate)
       return res.status(400).json({ error: "name, groupSize, monthlyContribution, duration and startDate are required." });
 
     const chit = await ChitFund.create({
       userId, name,
-      organizer:           organizer || "",
-      groupSize:           Number(groupSize),
-      monthlyContribution: Number(monthlyContribution),
-      duration:            Number(duration),
-      startDate:           new Date(startDate),
-      currency:            currency || "INR",
-      notes:               notes || "",
+      organizer:                   organizer || "",
+      groupSize:                   Number(groupSize),
+      monthlyContribution:         Number(monthlyContribution),
+      contributionFrequencyMonths: Number(contributionFrequencyMonths || 1),
+      duration:                    Number(duration),
+      startDate:                   new Date(startDate),
+      currency:                    currency || "INR",
+      notes:                       notes || "",
     });
     return res.status(201).json({ chit });
   }

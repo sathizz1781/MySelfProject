@@ -15,14 +15,15 @@ export default async function handler(req, res) {
 
   // PUT — update chit details OR record a payment
   if (req.method === "PUT") {
-    const { name, organizer, groupSize, monthlyContribution, duration, startDate, currency,
+    const { name, organizer, groupSize, monthlyContribution, contributionFrequencyMonths, duration, startDate, currency,
             status, potReceived, potMonth, potAmount, notes } = req.body;
 
-    if (name                !== undefined) chit.name                = name;
-    if (organizer           !== undefined) chit.organizer           = organizer;
-    if (groupSize           !== undefined) chit.groupSize           = Number(groupSize);
-    if (monthlyContribution !== undefined) chit.monthlyContribution = Number(monthlyContribution);
-    if (duration            !== undefined) chit.duration            = Number(duration);
+    if (name                         !== undefined) chit.name                         = name;
+    if (organizer                    !== undefined) chit.organizer                    = organizer;
+    if (groupSize                    !== undefined) chit.groupSize                    = Number(groupSize);
+    if (monthlyContribution          !== undefined) chit.monthlyContribution          = Number(monthlyContribution);
+    if (contributionFrequencyMonths  !== undefined) chit.contributionFrequencyMonths  = Number(contributionFrequencyMonths);
+    if (duration                     !== undefined) chit.duration                     = Number(duration);
     if (startDate           !== undefined) chit.startDate           = new Date(startDate);
     if (currency            !== undefined) chit.currency            = currency;
     if (status              !== undefined) chit.status              = status;
@@ -46,6 +47,15 @@ export default async function handler(req, res) {
     if (idx >= 0) chit.payments[idx] = entry;
     else chit.payments.push(entry);
 
+    await chit.save();
+    return res.status(200).json({ chit });
+  }
+
+  // PATCH — delete a specific payment by month
+  if (req.method === "PATCH") {
+    const { deleteMonth } = req.body;
+    if (!deleteMonth) return res.status(400).json({ error: "deleteMonth is required." });
+    chit.payments = chit.payments.filter(p => p.month !== deleteMonth);
     await chit.save();
     return res.status(200).json({ chit });
   }

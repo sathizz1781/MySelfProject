@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from "react";
-import Link from "next/link";
 import { Search, X, Pin, Archive, FileText } from "lucide-react";
 import { getAuthUser } from "../../../lib/auth";
-import ThemePicker from "../../../components/ThemePicker";
+import AppNav from "../../../components/AppNav";
+import connectDB from "../../../lib/mongodb";
+import User from "../../../models/User";
 
 const NOTE_COLORS = ["#1b1b2e","#162032","#1a1a0e","#1a0e0e","#0e1a1a","#1a0e1a","#1a150e","#151a0e"];
 
@@ -16,7 +17,7 @@ function timeAgo(iso) {
   return new Date(iso).toLocaleDateString("en-IN",{day:"numeric",month:"short"});
 }
 
-export default function NotesApp() {
+export default function NotesApp({ user }) {
   const [notes, setNotes]         = useState([]);
   const [loading, setLoading]     = useState(true);
   const [filter, setFilter]       = useState("all");
@@ -121,12 +122,9 @@ export default function NotesApp() {
 
   return (
     <div className="app-page">
-      <nav className="app-nav">
-        <Link href="/dashboard" className="app-nav-back">←</Link>
-        <h2>Notes</h2>
-        <span style={{fontSize:"0.75rem",color:"var(--text-muted)",marginLeft:"0.5rem"}}>{notes.length}</span>
-        <div style={{marginLeft:"auto"}}><ThemePicker /></div>
-      </nav>
+      <AppNav user={user} title="Notes">
+        <span style={{fontSize:"0.75rem",color:"var(--text-muted)"}}>{notes.length}</span>
+      </AppNav>
 
       <div style={{padding:"0 1.25rem 0"}}>
         <div className="search-bar" style={{marginBottom:"0.75rem",marginTop:"0.75rem"}}>
@@ -203,7 +201,17 @@ export default function NotesApp() {
 }
 
 export async function getServerSideProps(ctx) {
-  const user = getAuthUser(ctx.req);
-  if (!user) return { redirect: { destination: "/login", permanent: false } };
-  return { props: {} };
+  const decoded = getAuthUser(ctx.req);
+  if (!decoded) return { redirect: { destination: "/login", permanent: false } };
+  try {
+    await connectDB();
+    const dbUser = await User.findById(decoded.userId).lean();
+    if (!dbUser) return { redirect: { destination: "/login", permanent: false } };
+    if (dbUser.role === "admin") return { props: { user: { id: dbUser._id.toString(), name: dbUser.name, email: dbUser.email, role: "admin" } } };
+    const allowedApps = dbUser.allowedApps?.length ? dbUser.allowedApps : ["expenses","health","habits","notes","goals","calendar","reports","calculators"];
+    if (!allowedApps.includes("notes")) return { redirect: { destination: "/dashboard", permanent: false } };
+    return { props: { user: { id: dbUser._id.toString(), name: dbUser.name, email: dbUser.email, role: dbUser.role || "user" } } };
+  } catch {
+    return { redirect: { destination: "/login", permanent: false } };
+  }
 }

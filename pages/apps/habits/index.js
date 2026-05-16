@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
-import Link from "next/link";
 import { CheckSquare } from "lucide-react";
 import { getAuthUser } from "../../../lib/auth";
-import ThemePicker from "../../../components/ThemePicker";
+import AppNav from "../../../components/AppNav";
+import connectDB from "../../../lib/mongodb";
+import User from "../../../models/User";
 
 const COLORS = ["#6c63ff","#f97316","#10b981","#f59e0b","#ec4899","#0ea5e9","#8b5cf6","#ef4444"];
 
@@ -27,7 +28,7 @@ function calcStreak(completions, frequency) {
 
 function initForm() { return { name:"", description:"", frequency:"daily", color:"#6c63ff", targetPerWeek:"7" }; }
 
-export default function HabitsApp() {
+export default function HabitsApp({ user }) {
   const [activeTab, setActiveTab] = useState("today");
   const [habits, setHabits]       = useState([]);
   const [loading, setLoading]     = useState(true);
@@ -87,11 +88,7 @@ export default function HabitsApp() {
 
   return (
     <div className="app-page">
-      <nav className="app-nav">
-        <Link href="/dashboard" className="app-nav-back">←</Link>
-        <h2>Habits</h2>
-        <div style={{marginLeft:"auto"}}><ThemePicker /></div>
-      </nav>
+      <AppNav user={user} title="Habits" />
 
       <div className="tabs">
         {[{key:"today",label:"Today"},{key:"manage",label:"Manage"}].map(t=>(
@@ -215,7 +212,17 @@ export default function HabitsApp() {
 }
 
 export async function getServerSideProps(ctx) {
-  const user = getAuthUser(ctx.req);
-  if (!user) return { redirect: { destination: "/login", permanent: false } };
-  return { props: {} };
+  const decoded = getAuthUser(ctx.req);
+  if (!decoded) return { redirect: { destination: "/login", permanent: false } };
+  try {
+    await connectDB();
+    const dbUser = await User.findById(decoded.userId).lean();
+    if (!dbUser) return { redirect: { destination: "/login", permanent: false } };
+    if (dbUser.role === "admin") return { props: { user: { id: dbUser._id.toString(), name: dbUser.name, email: dbUser.email, role: "admin" } } };
+    const allowedApps = dbUser.allowedApps?.length ? dbUser.allowedApps : ["expenses","health","habits","notes","goals","calendar","reports","calculators"];
+    if (!allowedApps.includes("habits")) return { redirect: { destination: "/dashboard", permanent: false } };
+    return { props: { user: { id: dbUser._id.toString(), name: dbUser.name, email: dbUser.email, role: dbUser.role || "user" } } };
+  } catch {
+    return { redirect: { destination: "/login", permanent: false } };
+  }
 }

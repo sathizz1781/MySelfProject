@@ -23,6 +23,8 @@ const UserSchema = new mongoose.Schema(
       minlength: [6, 'Password must be at least 6 characters'],
       select: false,
     },
+    role: { type: String, enum: ['user', 'admin'], default: 'user' },
+    allowedApps: { type: [String], default: () => ["expenses", "health", "habits", "notes", "goals", "calendar", "reports", "calculators"] },
     resetOtp: { type: String, select: false },
     resetOtpExpiry: { type: Date, select: false },
   },

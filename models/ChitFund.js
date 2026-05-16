@@ -13,8 +13,9 @@ const chitFundSchema = new mongoose.Schema({
   name:                { type: String, required: true },
   organizer:           { type: String, default: "" },
   groupSize:           { type: Number, required: true },
-  monthlyContribution: { type: Number, required: true },
-  duration:            { type: Number, required: true },
+  monthlyContribution:          { type: Number, required: true },
+  contributionFrequencyMonths:  { type: Number, default: 1, min: 1 }, // every N months
+  duration:                     { type: Number, required: true },
   startDate:           { type: Date, required: true },
   currency:            { type: String, default: "INR" },
   status:              { type: String, enum: ["active", "completed", "withdrawn"], default: "active" },
