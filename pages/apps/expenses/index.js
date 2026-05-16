@@ -67,7 +67,7 @@ function initLoanForm() {
 }
 
 function initInvestForm() {
-  return { name: "", type: "mutual_fund", investedAmount: "", currentValue: "", units: "", avgPrice: "", currency: "INR", startDate: todayISO(), maturityDate: "", notes: "" };
+  return { name: "", type: "mutual_fund", investedAmount: "", currentValue: "", units: "", avgPrice: "", currency: "INR", startDate: todayISO(), maturityDate: "", notes: "", schemeCode: "", stockSymbol: "", stockExchange: "NS" };
 }
 
 const INVEST_TYPES = [
@@ -180,6 +180,15 @@ export default function ExpenseApp() {
   const [investForm, setInvestForm] = useState(initInvestForm);
   const [investError, setInvestError] = useState("");
   const [investSaving, setInvestSaving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState("");
+  // MF search
+  const [mfQuery, setMfQuery] = useState("");
+  const [mfResults, setMfResults] = useState([]);
+  const [mfSearching, setMfSearching] = useState(false);
+  const mfTimer = useRef(null);
+  // Stock price fetch
+  const [stockFetching, setStockFetching] = useState(false);
 
   // Opening Balance
   const [openingBalance, setOpeningBalance] = useState(0);
@@ -409,7 +418,10 @@ export default function ExpenseApp() {
   }
 
   // ── Investment CRUD ───────────────────────────────────────────────────────────
-  function openAddInvest() { setEditInvest(null); setInvestForm(initInvestForm()); setInvestError(""); setShowInvestModal(true); }
+  function openAddInvest() {
+    setEditInvest(null); setInvestForm(initInvestForm());
+    setInvestError(""); setMfQuery(""); setMfResults([]); setShowInvestModal(true);
+  }
   function openEditInvest(inv) {
     setEditInvest(inv);
     setInvestForm({
@@ -418,7 +430,10 @@ export default function ExpenseApp() {
       avgPrice: String(inv.avgPrice || ""), currency: inv.currency || "INR",
       startDate: inv.startDate?.slice(0, 10) || todayISO(),
       maturityDate: inv.maturityDate?.slice(0, 10) || "", notes: inv.notes || "",
+      schemeCode: inv.schemeCode || "", stockSymbol: inv.stockSymbol || "",
+      stockExchange: inv.stockExchange || "NS",
     });
+    setMfQuery(inv.schemeCode ? inv.name : ""); setMfResults([]);
     setInvestError(""); setShowInvestModal(true);
   }
   async function saveInvest() {
@@ -427,10 +442,81 @@ export default function ExpenseApp() {
     try {
       const url = editInvest ? `/api/investments/${editInvest._id}` : "/api/investments";
       const method = editInvest ? "PUT" : "POST";
-      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...investForm, investedAmount: Number(investForm.investedAmount), currentValue: Number(investForm.currentValue || investForm.investedAmount), units: Number(investForm.units || 0), avgPrice: Number(investForm.avgPrice || 0) }) });
+      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        ...investForm,
+        investedAmount: Number(investForm.investedAmount),
+        currentValue:   Number(investForm.currentValue || investForm.investedAmount),
+        units:          Number(investForm.units || 0),
+        avgPrice:       Number(investForm.avgPrice || 0),
+      }) });
       if (res.ok) { setShowInvestModal(false); fetchInvestments(); }
       else setInvestError((await res.json()).error || "Failed.");
     } finally { setInvestSaving(false); }
+  }
+
+  // MF search with debounce
+  function onMfQueryChange(val) {
+    setMfQuery(val);
+    clearTimeout(mfTimer.current);
+    if (val.trim().length < 2) { setMfResults([]); return; }
+    setMfSearching(true);
+    mfTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/investments/mf-search?q=${encodeURIComponent(val)}`);
+        if (res.ok) setMfResults((await res.json()).results || []);
+      } finally { setMfSearching(false); }
+    }, 350);
+  }
+
+  async function selectMf(scheme) {
+    setMfQuery(scheme.schemeName);
+    setMfResults([]);
+    setInvestForm(f => ({ ...f, name: scheme.schemeName, schemeCode: scheme.schemeCode }));
+    // fetch NAV to pre-fill current value
+    try {
+      const res = await fetch(`/api/investments/mf-nav?code=${scheme.schemeCode}`);
+      if (res.ok) {
+        const { nav } = await res.json();
+        if (nav) {
+          const units = Number(investForm.units) || 0;
+          setInvestForm(f => ({ ...f, currentValue: units > 0 ? String((units * nav).toFixed(2)) : String(nav.toFixed(4)), avgPrice: String(nav.toFixed(4)) }));
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  async function fetchStockPrice() {
+    if (!investForm.stockSymbol.trim()) return;
+    setStockFetching(true);
+    try {
+      const res = await fetch(`/api/investments/stock-price?symbol=${encodeURIComponent(investForm.stockSymbol.trim())}&exchange=${investForm.stockExchange}`);
+      if (res.ok) {
+        const { price, name } = await res.json();
+        if (price) {
+          const units = Number(investForm.units) || 0;
+          setInvestForm(f => ({
+            ...f,
+            name: f.name || name || f.stockSymbol.toUpperCase(),
+            currentValue: units > 0 ? String((units * price).toFixed(2)) : String(price.toFixed(2)),
+            avgPrice: f.avgPrice || String(price.toFixed(2)),
+          }));
+        }
+      } else setInvestError("Could not fetch price. Check the symbol.");
+    } catch { setInvestError("Failed to fetch stock price."); }
+    finally { setStockFetching(false); }
+  }
+
+  async function refreshAllPrices() {
+    setRefreshing(true); setRefreshMsg("");
+    try {
+      const res = await fetch("/api/investments/refresh-prices", { method: "POST" });
+      if (res.ok) {
+        const { updated, skipped, failed } = await res.json();
+        setRefreshMsg(`✓ ${updated} updated${skipped > 0 ? `, ${skipped} skipped` : ""}${failed > 0 ? `, ${failed} failed` : ""}`);
+        fetchInvestments();
+        setTimeout(() => setRefreshMsg(""), 4000);
+      }
+    } finally { setRefreshing(false); }
   }
   async function deleteInvest(id) {
     if (!confirm("Delete this investment?")) return;
@@ -1575,9 +1661,15 @@ export default function ExpenseApp() {
             </>
           )}
 
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: "0.5rem" }}>
             <h3 style={{ fontSize: "0.9rem", fontWeight: 600 }}>Portfolio</h3>
-            <button className="btn" style={{ width: "auto", padding: "0.42rem 0.9rem", fontSize: "0.82rem", marginTop: 0 }} onClick={openAddInvest}>+ Add</button>
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              {refreshMsg && <span style={{ fontSize: "0.75rem", color: "var(--success)" }}>{refreshMsg}</span>}
+              <button className="btn btn-ghost" style={{ width: "auto", padding: "0.42rem 0.9rem", fontSize: "0.82rem", marginTop: 0 }} onClick={refreshAllPrices} disabled={refreshing}>
+                {refreshing ? "Refreshing…" : "⟳ Refresh Prices"}
+              </button>
+              <button className="btn" style={{ width: "auto", padding: "0.42rem 0.9rem", fontSize: "0.82rem", marginTop: 0 }} onClick={openAddInvest}>+ Add</button>
+            </div>
           </div>
 
           {investLoading ? (
@@ -1636,6 +1728,11 @@ export default function ExpenseApp() {
                       </div>
                     )}
                     {inv.notes && <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginTop: "0.2rem" }}>{inv.notes}</div>}
+                    {inv.lastPriceAt && (
+                      <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginTop: "0.25rem" }}>
+                        Price updated {new Date(inv.lastPriceAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -2120,22 +2217,78 @@ export default function ExpenseApp() {
               <button className="icon-btn" onClick={() => setShowInvestModal(false)}>✕</button>
             </div>
 
-            <div className="form-group">
-              <label className="form-label">Name</label>
-              <input className="form-input" placeholder="e.g. SBI Bluechip Fund, HDFC Bank" value={investForm.name} onChange={e => setInvestForm(f => ({ ...f, name: e.target.value }))} autoFocus />
-            </div>
-
+            {/* Type selector */}
             <div className="form-group">
               <label className="form-label">Type</label>
               <div className="invest-type-grid">
                 {INVEST_TYPES.map(t => (
-                  <button key={t.key} className={`invest-type-btn ${investForm.type === t.key ? "selected" : ""}`} style={investForm.type === t.key ? { borderColor: t.color, background: `${t.color}18`, color: t.color } : {}} onClick={() => setInvestForm(f => ({ ...f, type: t.key }))}>
+                  <button key={t.key} className={`invest-type-btn ${investForm.type === t.key ? "selected" : ""}`} style={investForm.type === t.key ? { borderColor: t.color, background: `${t.color}18`, color: t.color } : {}} onClick={() => { setInvestForm(f => ({ ...f, type: t.key, schemeCode: "", stockSymbol: "" })); setMfQuery(""); setMfResults([]); }}>
                     {t.label}
                   </button>
                 ))}
               </div>
             </div>
 
+            {/* MF search */}
+            {investForm.type === "mutual_fund" && (
+              <div className="form-group" style={{ position: "relative" }}>
+                <label className="form-label">Search Fund <span style={{ textTransform: "none", fontWeight: 400, color: "var(--success)", fontSize: "0.68rem" }}>● Live NAV</span></label>
+                <input className="form-input" placeholder="Type fund name e.g. SBI Bluechip…" value={mfQuery} onChange={e => onMfQueryChange(e.target.value)} autoFocus />
+                {mfSearching && <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "0.3rem" }}>Searching…</div>}
+                {mfResults.length > 0 && (
+                  <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "var(--radius)", zIndex: 50, maxHeight: 200, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,0.3)" }}>
+                    {mfResults.map(r => (
+                      <div key={r.schemeCode} onClick={() => selectMf(r)} style={{ padding: "0.6rem 0.75rem", cursor: "pointer", fontSize: "0.8rem", borderBottom: "1px solid var(--border)" }}
+                        onMouseEnter={e => e.currentTarget.style.background = "var(--surface)"}
+                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                        <div style={{ fontWeight: 500 }}>{r.schemeName}</div>
+                        <div style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>Code: {r.schemeCode}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {investForm.schemeCode && <div style={{ fontSize: "0.7rem", color: "var(--success)", marginTop: "0.25rem" }}>✓ Linked — NAV auto-fetched</div>}
+              </div>
+            )}
+
+            {/* Stock symbol */}
+            {investForm.type === "stocks" && (
+              <div className="form-group">
+                <label className="form-label">Stock Symbol <span style={{ textTransform: "none", fontWeight: 400, color: "var(--success)", fontSize: "0.68rem" }}>● Live Price</span></label>
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <input className="form-input" placeholder="e.g. RELIANCE, TCS, INFY" value={investForm.stockSymbol} onChange={e => setInvestForm(f => ({ ...f, stockSymbol: e.target.value.toUpperCase() }))} style={{ flex: 1 }} />
+                  <select className="form-input" value={investForm.stockExchange} onChange={e => setInvestForm(f => ({ ...f, stockExchange: e.target.value }))} style={{ width: 80 }}>
+                    <option value="NS">NSE</option>
+                    <option value="BO">BSE</option>
+                  </select>
+                  <button className="btn" style={{ width: "auto", padding: "0.42rem 0.8rem", fontSize: "0.8rem", marginTop: 0, flexShrink: 0 }} onClick={fetchStockPrice} disabled={stockFetching || !investForm.stockSymbol.trim()}>
+                    {stockFetching ? "…" : "Get Price"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Name (manual if not MF) */}
+            {investForm.type !== "mutual_fund" && (
+              <div className="form-group">
+                <label className="form-label">Name</label>
+                <input className="form-input" placeholder="e.g. HDFC Bank, SGB 2024" value={investForm.name} onChange={e => setInvestForm(f => ({ ...f, name: e.target.value }))} />
+              </div>
+            )}
+
+            {/* Units + Avg price */}
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label className="form-label">Units / Shares</label>
+                <input className="form-input" type="number" min="0" step="0.001" placeholder="0" value={investForm.units} onChange={e => setInvestForm(f => ({ ...f, units: e.target.value }))} />
+              </div>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label className="form-label">Avg Buy Price</label>
+                <input className="form-input" type="number" min="0" step="0.01" placeholder="0" value={investForm.avgPrice} onChange={e => setInvestForm(f => ({ ...f, avgPrice: e.target.value }))} />
+              </div>
+            </div>
+
+            {/* Invested + Current */}
             <div style={{ display: "flex", gap: "0.5rem" }}>
               <div className="form-group" style={{ flex: 1 }}>
                 <label className="form-label">Amount Invested</label>
@@ -2144,17 +2297,6 @@ export default function ExpenseApp() {
               <div className="form-group" style={{ flex: 1 }}>
                 <label className="form-label">Current Value</label>
                 <input className="form-input" type="number" min="0" value={investForm.currentValue} onChange={e => setInvestForm(f => ({ ...f, currentValue: e.target.value }))} />
-              </div>
-            </div>
-
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              <div className="form-group" style={{ flex: 1 }}>
-                <label className="form-label">Units <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span></label>
-                <input className="form-input" type="number" min="0" step="0.001" placeholder="0" value={investForm.units} onChange={e => setInvestForm(f => ({ ...f, units: e.target.value }))} />
-              </div>
-              <div className="form-group" style={{ flex: 1 }}>
-                <label className="form-label">Avg Price <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span></label>
-                <input className="form-input" type="number" min="0" step="0.01" placeholder="0" value={investForm.avgPrice} onChange={e => setInvestForm(f => ({ ...f, avgPrice: e.target.value }))} />
               </div>
             </div>
 
@@ -2172,7 +2314,7 @@ export default function ExpenseApp() {
             </div>
 
             <div className="form-group">
-              <label className="form-label">Maturity Date <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)" }}>(for FD / Bonds)</span></label>
+              <label className="form-label">Maturity Date <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)" }}>(FD / Bonds)</span></label>
               <input className="form-input" type="date" value={investForm.maturityDate} onChange={e => setInvestForm(f => ({ ...f, maturityDate: e.target.value }))} />
             </div>
 

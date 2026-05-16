@@ -31,7 +31,7 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'POST') {
-    const { name, type, investedAmount, currentValue, units, avgPrice, currency, startDate, maturityDate, notes } = req.body;
+    const { name, type, investedAmount, currentValue, units, avgPrice, currency, startDate, maturityDate, notes, schemeCode, stockSymbol, stockExchange } = req.body;
     if (!name || investedAmount === undefined) return res.status(400).json({ error: 'name and investedAmount are required.' });
 
     const investment = await Investment.create({
@@ -46,6 +46,9 @@ export default async function handler(req, res) {
       startDate:      startDate ? new Date(startDate) : new Date(),
       maturityDate:   maturityDate ? new Date(maturityDate) : undefined,
       notes:          notes || '',
+      schemeCode:     schemeCode || '',
+      stockSymbol:    stockSymbol || '',
+      stockExchange:  stockExchange || 'NS',
     });
     return res.status(201).json({ investment });
   }

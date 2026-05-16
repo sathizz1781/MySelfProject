@@ -17,6 +17,10 @@ const investmentSchema = new mongoose.Schema({
   maturityDate:   { type: Date },                        // for FD / bonds
   notes:          { type: String, default: '' },
   isActive:       { type: Boolean, default: true },
+  schemeCode:     { type: String, default: '' },   // mfapi.in scheme code for MFs
+  stockSymbol:    { type: String, default: '' },   // NSE/BSE ticker for stocks
+  stockExchange:  { type: String, default: 'NS' }, // NS = NSE, BO = BSE
+  lastPriceAt:    { type: Date },                  // when price was last auto-fetched
 }, { timestamps: true });
 
 export default mongoose.models.Investment || mongoose.model('Investment', investmentSchema);

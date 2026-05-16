@@ -14,7 +14,7 @@ export default async function handler(req, res) {
   if (investment.userId.toString() !== authUser.userId) return res.status(403).json({ error: 'Forbidden.' });
 
   if (req.method === 'PUT') {
-    const { name, type, investedAmount, currentValue, units, avgPrice, currency, startDate, maturityDate, notes, isActive } = req.body;
+    const { name, type, investedAmount, currentValue, units, avgPrice, currency, startDate, maturityDate, notes, isActive, schemeCode, stockSymbol, stockExchange, lastPriceAt } = req.body;
     if (name           !== undefined) investment.name           = name;
     if (type           !== undefined) investment.type           = type;
     if (investedAmount !== undefined) investment.investedAmount = Number(investedAmount);
@@ -26,6 +26,10 @@ export default async function handler(req, res) {
     if (maturityDate   !== undefined) investment.maturityDate   = maturityDate ? new Date(maturityDate) : undefined;
     if (notes          !== undefined) investment.notes          = notes;
     if (isActive       !== undefined) investment.isActive       = Boolean(isActive);
+    if (schemeCode     !== undefined) investment.schemeCode     = schemeCode;
+    if (stockSymbol    !== undefined) investment.stockSymbol    = stockSymbol;
+    if (stockExchange  !== undefined) investment.stockExchange  = stockExchange;
+    if (lastPriceAt    !== undefined) investment.lastPriceAt    = lastPriceAt ? new Date(lastPriceAt) : undefined;
     await investment.save();
     return res.status(200).json({ investment });
   }
