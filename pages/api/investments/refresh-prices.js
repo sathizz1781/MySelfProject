@@ -51,7 +51,7 @@ export default async function handler(req, res) {
   const userId = new mongoose.Types.ObjectId(String(authUser.userId));
   const investments = await Investment.find({ userId });
 
-  const results = { updated: 0, skipped: 0, failed: 0 };
+  const results = { updated: 0, skipped: 0, failed: 0, skipReasons: { noCode: 0, noSymbol: 0, noUnits: 0, unsupportedType: 0 } };
 
   // Pre-fetch gold price once if any gold holdings exist
   const hasGold = investments.some(i => i.type === "gold" && i.units > 0);
@@ -64,12 +64,17 @@ export default async function handler(req, res) {
     investments.map(async (inv) => {
       let newPrice = null;
 
-      if (inv.type === "mutual_fund" && inv.schemeCode) {
+      if (inv.type === "mutual_fund") {
+        if (!inv.schemeCode) { results.skipped++; results.skipReasons.noCode++; return; }
         newPrice = await fetchNAV(inv.schemeCode);
-      } else if (inv.type === "stocks" && inv.stockSymbol) {
+      } else if (inv.type === "stocks") {
+        if (!inv.stockSymbol) { results.skipped++; results.skipReasons.noSymbol++; return; }
         newPrice = await fetchStockPrice(inv.stockSymbol, inv.stockExchange || "NS");
-      } else if (inv.type === "gold" && inv.units > 0 && goldPricePerGram) {
+      } else if (inv.type === "gold") {
+        if (!inv.units) { results.skipped++; results.skipReasons.noUnits++; return; }
         newPrice = goldPricePerGram;
+      } else {
+        results.skipped++; results.skipReasons.unsupportedType++; return;
       }
 
       if (newPrice === null) { results.skipped++; return; }

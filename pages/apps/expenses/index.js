@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, PieChart, Pie, Cell,
@@ -287,6 +287,9 @@ export default function ExpenseApp({ user }) {
   const [chitPayForm, setChitPayForm] = useState({ month: currentMonth(), amount: "", dividend: "0", paidOn: todayISO(), notes: "" });
   const [chitPaySaving, setChitPaySaving] = useState(false);
   const [expandedChitPayments, setExpandedChitPayments] = useState({});
+  const [expandedLoanPayments, setExpandedLoanPayments] = useState({});
+  const [expandedInvestContribs, setExpandedInvestContribs] = useState({});
+  const [dupeGroups, setDupeGroups] = useState(null);
   const [showPotModal, setShowPotModal] = useState(false);
   const [potChit, setPotChit] = useState(null);
   const [potForm, setPotForm] = useState({ potMonth: "1", potAmount: "", potReceived: true });
@@ -317,6 +320,7 @@ export default function ExpenseApp({ user }) {
       if (!loans.length) fetchLoans();
       if (!chits.length) fetchChits();
       if (!goals.length) fetchGoals();
+      if (!recurrings.length) fetchRecurrings();
     }
     if (activeTab === "chit") fetchChits();
     if (activeTab === "analytics") fetchAnalytics();
@@ -659,10 +663,19 @@ export default function ExpenseApp({ user }) {
     try {
       const res = await fetch("/api/investments/refresh-prices", { method: "POST" });
       if (res.ok) {
-        const { updated, skipped, failed } = await res.json();
-        setRefreshMsg(`✓ ${updated} updated${skipped > 0 ? `, ${skipped} skipped` : ""}${failed > 0 ? `, ${failed} failed` : ""}`);
+        const { updated, skipped, failed, skipReasons } = await res.json();
+        if (updated === 0 && skipped > 0) {
+          const hints = [];
+          if (skipReasons?.noCode)          hints.push(`${skipReasons.noCode} MF${skipReasons.noCode > 1 ? "s" : ""} have no scheme linked`);
+          if (skipReasons?.noSymbol)        hints.push(`${skipReasons.noSymbol} stock${skipReasons.noSymbol > 1 ? "s" : ""} have no symbol`);
+          if (skipReasons?.noUnits)         hints.push(`${skipReasons.noUnits} gold holding${skipReasons.noUnits > 1 ? "s" : ""} have no units`);
+          if (skipReasons?.unsupportedType) hints.push(`${skipReasons.unsupportedType} FD/PPF/other (no live price source)`);
+          setRefreshMsg(`⚠ ${skipped} skipped — ${hints.join(", ")}. Edit each to link a fund/symbol.`);
+        } else {
+          setRefreshMsg(`✓ ${updated} updated${skipped > 0 ? `, ${skipped} skipped` : ""}${failed > 0 ? `, ${failed} failed` : ""}`);
+        }
         fetchInvestments();
-        setTimeout(() => setRefreshMsg(""), 4000);
+        setTimeout(() => setRefreshMsg(""), 8000);
       }
     } finally { setRefreshing(false); }
   }
@@ -768,8 +781,12 @@ export default function ExpenseApp({ user }) {
         body: JSON.stringify({ file: xlsxBase64, filename: xlsxFilename, preview: false }),
       });
       if (res.ok) {
-        const { created, total } = await res.json();
-        setXlsxMsg(`✓ Imported ${created} of ${total} investments.`);
+        const { created, updated, total, linked } = await res.json();
+        const parts = [];
+        if (created)  parts.push(`${created} added`);
+        if (updated)  parts.push(`${updated} updated`);
+        if (linked)   parts.push(`${linked} auto-linked for live prices`);
+        setXlsxMsg(`✓ ${total} processed — ${parts.join(", ")}`);
         setShowXlsxModal(false);
         setXlsxPreview(null);
         fetchInvestments();
@@ -1399,6 +1416,53 @@ export default function ExpenseApp({ user }) {
           )}
 
           {/* Upcoming loan due dates */}
+          {/* Upcoming recurring dues */}
+          {(() => {
+            const today = new Date(); today.setHours(0,0,0,0);
+            const in30 = new Date(today); in30.setDate(in30.getDate() + 30);
+            const upcoming = recurrings
+              .filter(r => r.isActive && r.nextDate)
+              .map(r => { const next = new Date(r.nextDate); return { ...r, next, daysLeft: Math.round((next - today) / 86400000) }; })
+              .filter(r => r.daysLeft >= 0 && r.next <= in30)
+              .sort((a, b) => a.daysLeft - b.daysLeft)
+              .slice(0, 5);
+            if (upcoming.length === 0) return null;
+            const allCats = [...EXPENSE_CATEGORIES, ...INCOME_CATEGORIES];
+            return (
+              <div className="chart-card" style={{ marginBottom: "0.75rem", cursor: "pointer" }} onClick={() => setActiveTab("recurring")}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.6rem" }}>
+                  <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Upcoming Recurring</div>
+                  <span style={{ fontSize: "0.7rem", color: "var(--accent-light)" }}>View all →</span>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                  {upcoming.map(r => {
+                    const cat = allCats.find(c => c.key === r.category);
+                    return (
+                      <div key={r._id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", minWidth: 0 }}>
+                          {cat && <span style={{ width: 7, height: 7, borderRadius: "50%", background: cat.color, flexShrink: 0 }} />}
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: "0.78rem", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.description || cat?.label || r.category}</div>
+                            <div style={{ fontSize: "0.62rem", color: "var(--text-muted)" }}>{r.frequency}</div>
+                          </div>
+                        </div>
+                        <div style={{ textAlign: "right", flexShrink: 0, marginLeft: "0.5rem" }}>
+                          <div style={{ fontSize: "0.76rem", fontWeight: 700, color: r.type === "income" ? "var(--success)" : "var(--error)" }}>
+                            {r.type === "income" ? "+" : "−"}{fmt(r.amount, r.currency)}
+                          </div>
+                          <div style={{ fontSize: "0.62rem", fontWeight: 600, color: r.daysLeft <= 3 ? "var(--error)" : r.daysLeft <= 7 ? "#ffd43b" : "var(--text-muted)" }}>
+                            {r.daysLeft === 0 ? "Today" : r.daysLeft === 1 ? "Tomorrow" : `${r.daysLeft}d`}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Upcoming loan due dates */}
           {(() => {
             const today = new Date();
             const upcoming = loans
@@ -1519,7 +1583,61 @@ export default function ExpenseApp({ user }) {
             <button className="btn btn-ghost" style={{ width: "auto", padding: "0.38rem 0.85rem", fontSize: "0.78rem", marginTop: 0 }} onClick={() => setShowImport(v => !v)}>
               <Upload size={13} /> Import CSV
             </button>
+            <button className="btn btn-ghost" style={{ width: "auto", padding: "0.38rem 0.85rem", fontSize: "0.78rem", marginTop: 0 }} onClick={() => {
+              if (dupeGroups !== null) { setDupeGroups(null); return; }
+              const sorted = [...expenses].sort((a, b) => new Date(a.date) - new Date(b.date));
+              const groups = [];
+              const used = new Set();
+              for (let i = 0; i < sorted.length; i++) {
+                if (used.has(i)) continue;
+                const a = sorted[i];
+                const group = [a];
+                used.add(i);
+                for (let j = i + 1; j < sorted.length; j++) {
+                  if (used.has(j)) continue;
+                  const b = sorted[j];
+                  const daysDiff = Math.abs(new Date(a.date) - new Date(b.date)) / 86400000;
+                  if (daysDiff > 3) break;
+                  if (a.amount === b.amount && a.category === b.category) { group.push(b); used.add(j); }
+                }
+                if (group.length > 1) groups.push(group);
+              }
+              setDupeGroups(groups);
+            }}>
+              <Copy size={13} /> {dupeGroups !== null ? "Hide Dupes" : "Find Duplicates"}
+            </button>
           </div>
+
+          {/* Duplicate detection panel */}
+          {dupeGroups !== null && (
+            <div className="chart-card" style={{ marginBottom: "0.75rem", border: "1px solid rgba(255,100,100,0.25)", background: "rgba(255,50,50,0.04)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+                <div style={{ fontSize: "0.78rem", fontWeight: 700 }}>
+                  {dupeGroups.length === 0 ? "No duplicates found" : `${dupeGroups.length} potential duplicate group${dupeGroups.length !== 1 ? "s" : ""} found`}
+                </div>
+                <button className="icon-btn" onClick={() => setDupeGroups(null)}><X size={13} /></button>
+              </div>
+              {dupeGroups.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                  {dupeGroups.map((group, gi) => (
+                    <div key={gi} style={{ background: "var(--surface3)", borderRadius: "var(--radius)", padding: "0.5rem 0.65rem" }}>
+                      <div style={{ fontSize: "0.65rem", color: "var(--text-muted)", marginBottom: "0.35rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                        {group.length} entries · {fmt(group[0].amount, group[0].currency)} · {getCategoryMeta(group[0].category)?.label || group[0].category}
+                      </div>
+                      {group.map(tx => (
+                        <div key={tx._id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.2rem 0", borderTop: "1px solid var(--border)", fontSize: "0.72rem" }}>
+                          <span style={{ color: "var(--text-muted)" }}>{new Date(tx.date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })} · {tx.description || tx.merchant || "—"}</span>
+                          <button className="icon-btn" style={{ padding: "0.1rem 0.3rem", color: "var(--error)", fontSize: "0.68rem" }} onClick={() => { if (confirm("Delete this transaction?")) { fetch(`/api/expenses/${tx._id}`, { method: "DELETE" }).then(() => { fetchExpenses(); fetchStats(); setDupeGroups(null); }); } }}>
+                            <Trash2 size={11} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Import panel */}
           {showImport && (
@@ -2077,6 +2195,29 @@ export default function ExpenseApp({ user }) {
                         <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>({l.tenureMonths - (l.outstanding >= l.principal ? 0 : Math.max(0, Math.round((l.principal - l.outstanding) / (l.emiAmount || 1))))} remaining)</span>
                       </button>
                     )}
+
+                    {/* Payment history */}
+                    {l.payments?.length > 0 && (
+                      <>
+                        <button
+                          onClick={() => setExpandedLoanPayments(s => ({ ...s, [l._id]: !s[l._id] }))}
+                          style={{ marginTop: "0.5rem", width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.38rem 0.55rem", background: "var(--surface3)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", color: "var(--text-muted)", fontSize: "0.72rem", cursor: "pointer", fontFamily: "var(--font)" }}
+                        >
+                          <span style={{ fontWeight: 600 }}>{l.payments.length} payment{l.payments.length !== 1 ? "s" : ""} logged</span>
+                          <ChevronDown size={13} style={{ transform: expandedLoanPayments[l._id] ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} />
+                        </button>
+                        {expandedLoanPayments[l._id] && (
+                          <div style={{ marginTop: "0.25rem", display: "flex", flexDirection: "column", gap: "0.18rem" }}>
+                            {[...l.payments].sort((a, b) => new Date(b.date) - new Date(a.date)).map(p => (
+                              <div key={p._id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.3rem 0.55rem", background: "var(--surface3)", borderRadius: "var(--radius-sm)", fontSize: "0.72rem" }}>
+                                <span style={{ color: "var(--text-muted)" }}>{formatDate(p.date)}{p.note ? ` · ${p.note}` : ""}</span>
+                                <span style={{ fontWeight: 700, color: "var(--success)" }}>−{fmt(p.amount, l.currency)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
                   </div>
                 );
               })}
@@ -2152,7 +2293,7 @@ export default function ExpenseApp({ user }) {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem", flexWrap: "wrap", gap: "0.5rem" }}>
             <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
               {(refreshMsg || xlsxMsg) && (
-                <span style={{ fontSize: "0.75rem", color: "var(--success)", alignSelf: "center" }}>{refreshMsg || xlsxMsg}</span>
+                <span style={{ fontSize: "0.75rem", color: (refreshMsg || xlsxMsg).startsWith("⚠") ? "#ffd43b" : "var(--success)", alignSelf: "center", maxWidth: 280, lineHeight: 1.4 }}>{refreshMsg || xlsxMsg}</span>
               )}
               <button className="btn btn-ghost" style={{ width: "auto", padding: "0.38rem 0.8rem", fontSize: "0.78rem", marginTop: 0 }} onClick={refreshAllPrices} disabled={refreshing}>
                 {refreshing ? "Refreshing…" : "⟳ Refresh"}
@@ -2221,18 +2362,38 @@ export default function ExpenseApp({ user }) {
                   const t       = INVEST_TYPES.find(t => t.key === inv.type);
                   const isLast  = idx === filtered.length - 1;
                   return (
-                    <div key={inv._id} className="invest-list-row" style={{ borderBottom: isLast ? "none" : "1px solid var(--border)" }}>
+                    <React.Fragment key={inv._id}>
+                    <div className="invest-list-row" style={{ borderBottom: isLast ? "none" : "1px solid var(--border)" }}>
 
                       {/* Company col */}
                       <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", minWidth: 0, paddingRight: "0.5rem" }}>
                         <div style={{ width: 3, alignSelf: "stretch", borderRadius: 2, background: t?.color || "#6b7280", flexShrink: 0, minHeight: 36 }} />
                         <div style={{ minWidth: 0 }}>
-                          <div style={{ fontWeight: 600, fontSize: "0.85rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{inv.name}</div>
-                          <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: "0.1rem", display: "flex", gap: "0.35rem", flexWrap: "wrap" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: "0.85rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{inv.name}</div>
+                            {inv.investmentMode === "sip" && (
+                              <span style={{ fontSize: "0.58rem", fontWeight: 800, letterSpacing: "0.04em", color: "#a78bfa", background: "rgba(167,139,250,0.12)", border: "1px solid rgba(167,139,250,0.25)", borderRadius: 4, padding: "0.05rem 0.35rem", flexShrink: 0 }}>SIP</span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: "0.1rem", display: "flex", gap: "0.35rem", flexWrap: "wrap", alignItems: "center" }}>
+                            {inv.investmentMode === "sip" && inv.sipAmount > 0 && (
+                              <span style={{ color: "#a78bfa" }}>{fmt(inv.sipAmount, inv.currency)}/mo · day {inv.sipDay}</span>
+                            )}
                             {inv.units > 0 && <span>{inv.units} {inv.units === 1 ? "unit" : "units"}</span>}
                             {inv.avgPrice > 0 && <span>· Avg {fmt(inv.avgPrice, inv.currency)}</span>}
                             {investTypeFilter === "all" && <span style={{ color: t?.color || "#6b7280" }}>· {t?.label || inv.type}</span>}
-                            {inv.lastPriceAt && <span>· {new Date(inv.lastPriceAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</span>}
+                            {inv.lastPriceAt
+                              ? <span>· Updated {new Date(inv.lastPriceAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</span>
+                              : (inv.type === "mutual_fund" && !inv.schemeCode) ? (
+                                  <button onClick={() => openEditInvest(inv)} style={{ background: "rgba(148,163,184,0.1)", border: "1px solid rgba(148,163,184,0.2)", borderRadius: 4, color: "var(--text-muted)", fontSize: "0.62rem", fontWeight: 600, padding: "0.05rem 0.4rem", cursor: "pointer" }}>
+                                    · Link fund for live NAV
+                                  </button>
+                                ) : (inv.type === "stocks" && !inv.stockSymbol) ? (
+                                  <button onClick={() => openEditInvest(inv)} style={{ background: "rgba(148,163,184,0.1)", border: "1px solid rgba(148,163,184,0.2)", borderRadius: 4, color: "var(--text-muted)", fontSize: "0.62rem", fontWeight: 600, padding: "0.05rem 0.4rem", cursor: "pointer" }}>
+                                    · Add symbol for live price
+                                  </button>
+                                ) : null
+                            }
                           </div>
                         </div>
                       </div>
@@ -2255,10 +2416,43 @@ export default function ExpenseApp({ user }) {
 
                       {/* Actions col */}
                       <div style={{ display: "flex", flexDirection: "column", gap: "0.15rem", alignItems: "flex-end" }}>
-                        <button className="icon-btn" style={{ padding: "0.15rem 0.3rem" }} onClick={() => openEditInvest(inv)}><Pencil size={13} /></button>
-                        <button className="icon-btn" style={{ padding: "0.15rem 0.3rem" }} onClick={() => deleteInvest(inv._id)}><Trash2 size={13} /></button>
+                        <button
+                          className="btn"
+                          style={{ width: "auto", padding: "0.2rem 0.55rem", fontSize: "0.68rem", marginTop: 0, background: inv.investmentMode === "sip" ? "rgba(167,139,250,0.15)" : "var(--accent-dim)", color: inv.investmentMode === "sip" ? "#a78bfa" : "var(--accent-light)", border: `1px solid ${inv.investmentMode === "sip" ? "rgba(167,139,250,0.3)" : "transparent"}` }}
+                          onClick={() => { setContribTarget(inv); setContribAmount(inv.investmentMode === "sip" && inv.sipAmount ? String(inv.sipAmount) : ""); setContribDate(todayISO()); setContribNote(""); setContribRecordTx(true); setShowContribModal(true); }}
+                        >
+                          {inv.investmentMode === "sip" ? "Log SIP" : "Log +"}
+                        </button>
+                        <div style={{ display: "flex", gap: "0.15rem" }}>
+                          <button className="icon-btn" style={{ padding: "0.15rem 0.3rem" }} onClick={() => openEditInvest(inv)}><Pencil size={13} /></button>
+                          <button className="icon-btn" style={{ padding: "0.15rem 0.3rem" }} onClick={() => deleteInvest(inv._id)}><Trash2 size={13} /></button>
+                        </div>
                       </div>
                     </div>
+
+                    {/* Contribution history */}
+                    {inv.contributions?.length > 0 && (
+                      <>
+                        <button
+                          onClick={() => setExpandedInvestContribs(s => ({ ...s, [inv._id]: !s[inv._id] }))}
+                          style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.3rem 0.55rem", marginTop: "0.25rem", background: "var(--surface3)", border: "none", borderTop: "1px solid var(--border)", borderRadius: 0, color: "var(--text-muted)", fontSize: "0.68rem", cursor: "pointer", fontFamily: "var(--font)" }}
+                        >
+                          <span style={{ fontWeight: 600 }}>{inv.contributions.length} contribution{inv.contributions.length !== 1 ? "s" : ""} logged · total {fmt(inv.contributions.reduce((s, c) => s + c.amount, 0), inv.currency)}</span>
+                          <ChevronDown size={12} style={{ transform: expandedInvestContribs[inv._id] ? "rotate(180deg)" : "none", transition: "transform 0.2s", flexShrink: 0 }} />
+                        </button>
+                        {expandedInvestContribs[inv._id] && (
+                          <div style={{ display: "flex", flexDirection: "column" }}>
+                            {[...inv.contributions].sort((a, b) => new Date(b.date) - new Date(a.date)).map(c => (
+                              <div key={c._id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.28rem 0.55rem", borderTop: "1px solid var(--border)", fontSize: "0.7rem", background: "var(--surface3)" }}>
+                                <span style={{ color: "var(--text-muted)" }}>{new Date(c.date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "2-digit" })}{c.note ? ` · ${c.note}` : ""}</span>
+                                <span style={{ fontWeight: 700, color: "var(--accent-light)" }}>{fmt(c.amount, inv.currency)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                    </React.Fragment>
                   );
                 })}
               </div>
@@ -3280,6 +3474,43 @@ export default function ExpenseApp({ user }) {
               </div>
             </div>
 
+            {/* SIP / Lumpsum mode — for MF and any investment type */}
+            <div className="form-group">
+              <label className="form-label">Investment Mode</label>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                {[{ v: "lumpsum", label: "Lumpsum" }, { v: "sip", label: "SIP (monthly)" }].map(({ v, label }) => (
+                  <button key={v} type="button"
+                    onClick={() => setInvestForm(f => ({ ...f, investmentMode: v }))}
+                    style={{
+                      flex: 1, padding: "0.42rem 0", fontSize: "0.82rem", borderRadius: "var(--radius)",
+                      border: `1.5px solid ${investForm.investmentMode === v ? "var(--accent)" : "var(--border)"}`,
+                      background: investForm.investmentMode === v ? "rgba(108,99,255,0.12)" : "var(--surface2)",
+                      color: investForm.investmentMode === v ? "var(--accent-light)" : "var(--text-muted)",
+                      cursor: "pointer", fontWeight: 700, transition: "all 0.15s",
+                    }}
+                  >{label}</button>
+                ))}
+              </div>
+            </div>
+
+            {/* SIP details */}
+            {investForm.investmentMode === "sip" && (
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <div className="form-group" style={{ flex: 2 }}>
+                  <label className="form-label">Monthly SIP Amount</label>
+                  <input className="form-input" type="number" min="1" placeholder="5000"
+                    value={investForm.sipAmount}
+                    onChange={e => setInvestForm(f => ({ ...f, sipAmount: e.target.value }))} />
+                </div>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label className="form-label">Debit Day</label>
+                  <input className="form-input" type="number" min="1" max="28" placeholder="1"
+                    value={investForm.sipDay}
+                    onChange={e => setInvestForm(f => ({ ...f, sipDay: e.target.value }))} />
+                </div>
+              </div>
+            )}
+
             {/* MF search */}
             {investForm.type === "mutual_fund" && (
               <div className="form-group" style={{ position: "relative" }}>
@@ -3423,6 +3654,46 @@ export default function ExpenseApp({ user }) {
 
             {investError && <div className="alert alert-error">{investError}</div>}
             <button className="btn" onClick={saveInvest} disabled={investSaving}>{investSaving ? "Saving…" : editInvest ? "Update" : "Add Investment"}</button>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════
+          SIP / CONTRIBUTION MODAL
+      ══════════════════════════════════════════════════════════════════ */}
+      {showContribModal && contribTarget && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowContribModal(false)}>
+          <div className="modal">
+            <div className="modal-title">
+              <span>{contribTarget.investmentMode === "sip" ? "Log SIP Payment" : "Log Contribution"} — {contribTarget.name}</span>
+              <button className="icon-btn" onClick={() => setShowContribModal(false)}>✕</button>
+            </div>
+            {contribTarget.investmentMode === "sip" && contribTarget.sipAmount > 0 && (
+              <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", marginBottom: "0.75rem" }}>
+                SIP amount: <strong style={{ color: "var(--accent-light)" }}>{fmt(contribTarget.sipAmount, contribTarget.currency)}</strong> · Debit day {contribTarget.sipDay}
+              </p>
+            )}
+            <div className="form-group">
+              <label className="form-label">Amount Paid</label>
+              <input className="form-input" type="number" min="1" placeholder={contribTarget.sipAmount || "0"} value={contribAmount}
+                onChange={e => setContribAmount(e.target.value)} autoFocus />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Date</label>
+              <input className="form-input" type="date" value={contribDate} max={todayISO()} onChange={e => setContribDate(e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Note <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span></label>
+              <input className="form-input" placeholder="e.g. May SIP" value={contribNote} onChange={e => setContribNote(e.target.value)} />
+            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: "0.55rem", cursor: "pointer", marginBottom: "1rem", padding: "0.6rem 0.75rem", background: contribRecordTx ? "rgba(108,99,255,0.07)" : "var(--surface2)", border: `1px solid ${contribRecordTx ? "rgba(108,99,255,0.25)" : "var(--border)"}`, borderRadius: "var(--radius)", transition: "all 0.15s" }}>
+              <input type="checkbox" checked={contribRecordTx} onChange={e => setContribRecordTx(e.target.checked)} style={{ width: 15, height: 15, accentColor: "var(--accent)", cursor: "pointer" }} />
+              <div>
+                <div style={{ fontSize: "0.8rem", fontWeight: 600 }}>Record as expense transaction</div>
+                <div style={{ fontSize: "0.67rem", color: "var(--text-muted)", marginTop: "0.1rem" }}>Adds an "Investment / SIP" entry to your transactions for this month</div>
+              </div>
+            </label>
+            <button className="btn" onClick={saveContrib} disabled={contribSaving || !contribAmount}>{contribSaving ? "Saving…" : contribTarget.investmentMode === "sip" ? "Record SIP" : "Record Contribution"}</button>
           </div>
         </div>
       )}

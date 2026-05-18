@@ -490,6 +490,398 @@ function SimpleInterestCalc() {
   );
 }
 
+// ── PPF ────────────────────────────────────────────────────────────────────────
+function PPFCalc() {
+  const [annual, setAnnual] = useState("150000");
+  const [rate, setRate]     = useState("7.1");
+  const [years, setYears]   = useState("15");
+
+  const A = Math.min(Number(annual) || 0, 150000);
+  const R = (Number(rate) || 0) / 100;
+  const Y = Math.max(1, Math.min(Number(years) || 15, 50));
+  let balance = 0;
+  const yearRows = [];
+  for (let y = 1; y <= Y; y++) {
+    const interest = Math.round((balance + A) * R);
+    balance = balance + A + interest;
+    yearRows.push({ year: y, deposit: A, interest, balance });
+  }
+  const totalDeposited = A * Y;
+  const totalInterest  = balance - totalDeposited;
+
+  return (
+    <div>
+      <div className="calc-grid">
+        <div className="form-group">
+          <label className="form-label">Annual Investment (₹, max 1.5L)</label>
+          <input className="form-input" type="number" value={annual} onChange={e => setAnnual(e.target.value)} placeholder="150000" />
+          <PillRow values={[50000, 75000, 100000, 125000, 150000]} active={annual} onSelect={setAnnual} format={v => `₹${(v/1000).toFixed(0)}k`} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Interest Rate (% p.a.) — current 7.1%</label>
+          <input className="form-input" type="number" step="0.1" value={rate} onChange={e => setRate(e.target.value)} placeholder="7.1" />
+          <PillRow values={[7.1, 7.5, 8, 8.5]} active={rate} onSelect={setRate} format={v => `${v}%`} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Tenure (years, min 15)</label>
+          <input className="form-input" type="number" min="15" max="50" value={years} onChange={e => setYears(e.target.value)} placeholder="15" />
+          <PillRow values={[15, 20, 25, 30]} active={years} onSelect={setYears} format={v => `${v}y`} />
+        </div>
+      </div>
+
+      {A > 0 && Y >= 15 && (
+        <>
+          <ResultCard
+            hero={fmtINR(balance)}
+            heroLabel="Maturity Value"
+            rows={[
+              { label: "Total Deposited",  value: fmtINR(totalDeposited) },
+              { label: "Total Interest",   value: `+${fmtINR(totalInterest)}`, color: "var(--success)" },
+              { label: "Maturity Amount",  value: fmtINR(balance), bold: true },
+              { label: "Effective Return", value: `${((totalInterest / totalDeposited) * 100).toFixed(1)}%` },
+            ]}
+          />
+          <SplitBar leftPct={pct(totalDeposited, balance)} leftLabel="Deposited" rightLabel="Interest" leftColor="var(--accent-light)" rightColor="var(--success)" />
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Step-up SIP ────────────────────────────────────────────────────────────────
+function StepUpSIPCalc() {
+  const [monthly, setMonthly] = useState("5000");
+  const [stepPct, setStepPct] = useState("10");
+  const [rate, setRate]       = useState("12");
+  const [years, setYears]     = useState("15");
+
+  const M = Number(monthly) || 0;
+  const S = (Number(stepPct) || 0) / 100;
+  const R = (Number(rate) || 0) / 100 / 12;
+  const Y = Number(years) || 0;
+
+  let invested = 0, corpus = 0, currentSIP = M;
+  for (let y = 0; y < Y; y++) {
+    for (let m = 0; m < 12; m++) {
+      corpus = (corpus + currentSIP) * (1 + R);
+      invested += currentSIP;
+    }
+    currentSIP = Math.round(currentSIP * (1 + S));
+  }
+  const gain = corpus - invested;
+
+  return (
+    <div>
+      <div className="calc-grid">
+        <div className="form-group">
+          <label className="form-label">Starting Monthly SIP (₹)</label>
+          <input className="form-input" type="number" value={monthly} onChange={e => setMonthly(e.target.value)} placeholder="5000" />
+          <PillRow values={[1000, 3000, 5000, 10000, 25000]} active={monthly} onSelect={setMonthly} format={v => `₹${(v/1000).toFixed(0)}k`} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Annual Step-up (%)</label>
+          <input className="form-input" type="number" step="1" value={stepPct} onChange={e => setStepPct(e.target.value)} placeholder="10" />
+          <PillRow values={[5, 10, 15, 20]} active={stepPct} onSelect={setStepPct} format={v => `${v}%`} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Expected Return (% p.a.)</label>
+          <input className="form-input" type="number" step="0.5" value={rate} onChange={e => setRate(e.target.value)} placeholder="12" />
+          <PillRow values={[8, 10, 12, 15]} active={rate} onSelect={setRate} format={v => `${v}%`} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Duration (years)</label>
+          <input className="form-input" type="number" value={years} onChange={e => setYears(e.target.value)} placeholder="15" />
+          <PillRow values={[5, 10, 15, 20, 30]} active={years} onSelect={setYears} format={v => `${v}y`} />
+        </div>
+      </div>
+
+      {M > 0 && Y > 0 && (
+        <>
+          <ResultCard
+            hero={fmtINR(corpus)}
+            heroLabel="Estimated Corpus"
+            rows={[
+              { label: "Starting SIP",     value: fmtINR(M) + "/mo" },
+              { label: `SIP after ${Y}y`,  value: fmtINR(currentSIP / (1 + S)) + "/mo" },
+              { label: "Total Invested",   value: fmtINR(invested) },
+              { label: "Estimated Gains",  value: `+${fmtINR(gain)}`, color: "var(--success)" },
+              { label: "Corpus",           value: fmtINR(corpus), bold: true },
+            ]}
+          />
+          <SplitBar leftPct={pct(invested, corpus)} leftLabel="Invested" rightLabel="Gains" leftColor="var(--accent-light)" rightColor="var(--success)" />
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Goal SIP ───────────────────────────────────────────────────────────────────
+function GoalSIPCalc() {
+  const [target, setTarget]   = useState("5000000");
+  const [rate, setRate]       = useState("12");
+  const [years, setYears]     = useState("15");
+  const [existing, setExisting] = useState("0");
+
+  const T = Number(target) || 0;
+  const R = (Number(rate) || 0) / 100 / 12;
+  const N = (Number(years) || 0) * 12;
+  const E = Number(existing) || 0;
+  const futureExisting = E * Math.pow(1 + R, N);
+  const remaining = Math.max(0, T - futureExisting);
+  const sip = R > 0 && N > 0
+    ? remaining * R / (Math.pow(1 + R, N) - 1)
+    : N > 0 ? remaining / N : 0;
+  const totalInvested = sip * N + E;
+  const gains = T - totalInvested;
+
+  return (
+    <div>
+      <div className="calc-grid">
+        <div className="form-group">
+          <label className="form-label">Target Amount (₹)</label>
+          <input className="form-input" type="number" value={target} onChange={e => setTarget(e.target.value)} placeholder="5000000" />
+          <PillRow values={[500000, 1000000, 2500000, 5000000, 10000000]} active={target} onSelect={setTarget} format={v => v >= 10000000 ? `₹${v/10000000}Cr` : `₹${v/100000}L`} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Expected Return (% p.a.)</label>
+          <input className="form-input" type="number" step="0.5" value={rate} onChange={e => setRate(e.target.value)} placeholder="12" />
+          <PillRow values={[8, 10, 12, 15]} active={rate} onSelect={setRate} format={v => `${v}%`} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Time to Goal (years)</label>
+          <input className="form-input" type="number" value={years} onChange={e => setYears(e.target.value)} placeholder="15" />
+          <PillRow values={[5, 10, 15, 20, 25, 30]} active={years} onSelect={setYears} format={v => `${v}y`} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Existing Savings (₹) — optional</label>
+          <input className="form-input" type="number" value={existing} onChange={e => setExisting(e.target.value)} placeholder="0" />
+        </div>
+      </div>
+
+      {T > 0 && N > 0 && (
+        <ResultCard
+          hero={fmtINR(sip)}
+          heroLabel="Monthly SIP Required"
+          rows={[
+            { label: "Target Corpus",    value: fmtINR(T) },
+            { label: "Existing savings", value: fmtINR(E) },
+            { label: "Future value of existing", value: fmtINR(futureExisting) },
+            { label: "SIP needed",       value: fmtINR(sip) + "/mo", bold: true },
+            { label: "Total you invest", value: fmtINR(totalInvested) },
+            { label: "Estimated gains",  value: `+${fmtINR(Math.max(0, gains))}`, color: "var(--success)" },
+          ]}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── CAGR ───────────────────────────────────────────────────────────────────────
+function CAGRCalc() {
+  const [initial, setInitial] = useState("100000");
+  const [final, setFinal]     = useState("250000");
+  const [years, setYears]     = useState("5");
+
+  const I = Number(initial) || 0;
+  const F = Number(final) || 0;
+  const Y = Number(years) || 0;
+  const cagr = I > 0 && Y > 0 && F > 0 ? (Math.pow(F / I, 1 / Y) - 1) * 100 : 0;
+  const absoluteReturn = I > 0 ? ((F - I) / I) * 100 : 0;
+  const gain = F - I;
+
+  return (
+    <div>
+      <div className="calc-grid">
+        <div className="form-group">
+          <label className="form-label">Initial Investment (₹)</label>
+          <input className="form-input" type="number" value={initial} onChange={e => setInitial(e.target.value)} placeholder="100000" />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Final Value (₹)</label>
+          <input className="form-input" type="number" value={final} onChange={e => setFinal(e.target.value)} placeholder="250000" />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Duration (years)</label>
+          <input className="form-input" type="number" step="0.5" value={years} onChange={e => setYears(e.target.value)} placeholder="5" />
+          <PillRow values={[1, 2, 3, 5, 7, 10, 15]} active={years} onSelect={setYears} format={v => `${v}y`} />
+        </div>
+      </div>
+
+      {I > 0 && F > 0 && Y > 0 && (
+        <ResultCard
+          hero={`${cagr.toFixed(2)}%`}
+          heroLabel="CAGR (Compound Annual Growth Rate)"
+          rows={[
+            { label: "Initial Investment",  value: fmtINR(I) },
+            { label: "Final Value",         value: fmtINR(F) },
+            { label: "Gain / Loss",         value: `${gain >= 0 ? "+" : ""}${fmtINR(gain)}`, color: gain >= 0 ? "var(--success)" : "var(--error)" },
+            { label: "Absolute Return",     value: `${absoluteReturn.toFixed(2)}%`, color: absoluteReturn >= 0 ? "var(--success)" : "var(--error)" },
+            { label: "CAGR",               value: `${cagr.toFixed(2)}%`, bold: true, color: cagr >= 0 ? "var(--success)" : "var(--error)" },
+          ]}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Inflation ──────────────────────────────────────────────────────────────────
+function InflationCalc() {
+  const [amount, setAmount]     = useState("100000");
+  const [rate, setRate]         = useState("6");
+  const [years, setYears]       = useState("10");
+  const [mode, setMode]         = useState("future"); // future | present
+
+  const A = Number(amount) || 0;
+  const R = (Number(rate) || 0) / 100;
+  const Y = Number(years) || 0;
+  const futureValue   = A * Math.pow(1 + R, Y);
+  const presentValue  = A / Math.pow(1 + R, Y);
+  const result = mode === "future" ? futureValue : presentValue;
+  const diff   = mode === "future" ? futureValue - A : A - presentValue;
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
+        {[{ v: "future", label: "Future Cost" }, { v: "present", label: "Present Value" }].map(({ v, label }) => (
+          <button key={v} type="button" onClick={() => setMode(v)}
+            style={{ flex: 1, padding: "0.4rem", borderRadius: "var(--radius)", border: `1.5px solid ${mode === v ? "var(--accent)" : "var(--border)"}`, background: mode === v ? "var(--accent-dim)" : "var(--surface2)", color: mode === v ? "var(--accent-light)" : "var(--text-muted)", fontSize: "0.82rem", cursor: "pointer", fontWeight: 700, transition: "all 0.15s" }}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="calc-grid">
+        <div className="form-group">
+          <label className="form-label">{mode === "future" ? "Today's Cost (₹)" : "Future Amount (₹)"}</label>
+          <input className="form-input" type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="100000" />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Inflation Rate (% p.a.)</label>
+          <input className="form-input" type="number" step="0.5" value={rate} onChange={e => setRate(e.target.value)} placeholder="6" />
+          <PillRow values={[4, 5, 6, 7, 8]} active={rate} onSelect={setRate} format={v => `${v}%`} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Years</label>
+          <input className="form-input" type="number" value={years} onChange={e => setYears(e.target.value)} placeholder="10" />
+          <PillRow values={[5, 10, 15, 20, 25, 30]} active={years} onSelect={setYears} format={v => `${v}y`} />
+        </div>
+      </div>
+
+      {A > 0 && Y > 0 && (
+        <ResultCard
+          hero={fmtINR(result)}
+          heroLabel={mode === "future" ? `Cost after ${Y} years at ${rate}% inflation` : `Today's worth of that amount`}
+          rows={[
+            { label: mode === "future" ? "Today's Cost" : "Future Amount",   value: fmtINR(A) },
+            { label: mode === "future" ? "Inflation Impact" : "Purchasing Power Lost", value: fmtINR(diff), color: "var(--error)" },
+            { label: mode === "future" ? `Future Cost (${Y}y)` : `Present Value (${Y}y ago)`, value: fmtINR(result), bold: true },
+          ]}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Income Tax ─────────────────────────────────────────────────────────────────
+function IncomeTaxCalc() {
+  const [income, setIncome]   = useState("1200000");
+  const [regime, setRegime]   = useState("new");
+  const [deductions, setDeductions] = useState("150000"); // 80C etc. for old regime
+
+  const gross = Number(income) || 0;
+  const ded   = Number(deductions) || 0;
+
+  function calcNew(gross) {
+    const std = 75000; // standard deduction FY 2025-26
+    const taxable = Math.max(0, gross - std);
+    if (taxable <= 1200000) return 0; // rebate u/s 87A for new regime
+    const slabs = [[400000,0],[400000,0.05],[400000,0.1],[400000,0.15],[400000,0.2],[Infinity,0.3]];
+    let tax = 0, remaining = taxable;
+    for (const [limit, rate] of slabs) {
+      const chunk = Math.min(remaining, limit);
+      tax += chunk * rate;
+      remaining -= chunk;
+      if (remaining <= 0) break;
+    }
+    return tax * 1.04; // 4% cess
+  }
+
+  function calcOld(gross, ded) {
+    const std = 50000;
+    const taxable = Math.max(0, gross - std - ded);
+    if (taxable <= 500000) return 0; // rebate u/s 87A
+    const slabs = [[250000,0],[250000,0.05],[500000,0.2],[Infinity,0.3]];
+    let tax = 0, remaining = taxable;
+    for (const [limit, rate] of slabs) {
+      const chunk = Math.min(remaining, limit);
+      tax += chunk * rate;
+      remaining -= chunk;
+      if (remaining <= 0) break;
+    }
+    return tax * 1.04;
+  }
+
+  const taxNew     = calcNew(gross);
+  const taxOld     = calcOld(gross, ded);
+  const tax        = regime === "new" ? taxNew : taxOld;
+  const stdDed     = regime === "new" ? 75000 : 50000;
+  const taxable    = Math.max(0, gross - stdDed - (regime === "old" ? ded : 0));
+  const effective  = gross > 0 ? (tax / gross) * 100 : 0;
+  const inHand     = gross - tax;
+  const better     = taxNew <= taxOld ? "new" : "old";
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
+        {[{ v: "new", label: "New Regime" }, { v: "old", label: "Old Regime" }].map(({ v, label }) => (
+          <button key={v} type="button" onClick={() => setRegime(v)}
+            style={{ flex: 1, padding: "0.4rem", borderRadius: "var(--radius)", border: `1.5px solid ${regime === v ? "var(--accent)" : "var(--border)"}`, background: regime === v ? "var(--accent-dim)" : "var(--surface2)", color: regime === v ? "var(--accent-light)" : "var(--text-muted)", fontSize: "0.82rem", cursor: "pointer", fontWeight: 700, transition: "all 0.15s" }}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="calc-grid">
+        <div className="form-group">
+          <label className="form-label">Annual Gross Income (₹)</label>
+          <input className="form-input" type="number" value={income} onChange={e => setIncome(e.target.value)} placeholder="1200000" />
+          <PillRow values={[600000, 900000, 1200000, 1500000, 2000000, 3000000]} active={income} onSelect={setIncome} format={v => `₹${v/100000}L`} />
+        </div>
+        {regime === "old" && (
+          <div className="form-group">
+            <label className="form-label">Deductions (80C, 80D, HRA, etc. ₹)</label>
+            <input className="form-input" type="number" value={deductions} onChange={e => setDeductions(e.target.value)} placeholder="150000" />
+            <PillRow values={[50000, 100000, 150000, 200000, 300000]} active={deductions} onSelect={setDeductions} format={v => `₹${v/1000}k`} />
+          </div>
+        )}
+      </div>
+
+      {gross > 0 && (
+        <>
+          <ResultCard
+            hero={fmtINR(tax)}
+            heroLabel={`Tax Payable — ${regime === "new" ? "New" : "Old"} Regime (FY 2025-26)`}
+            rows={[
+              { label: "Gross Income",       value: fmtINR(gross) },
+              { label: "Standard Deduction", value: `−${fmtINR(stdDed)}` },
+              ...(regime === "old" ? [{ label: "Other Deductions", value: `−${fmtINR(ded)}` }] : []),
+              { label: "Taxable Income",     value: fmtINR(taxable) },
+              { label: "Tax + 4% Cess",      value: fmtINR(tax), color: "var(--error)" },
+              { label: "Effective Rate",     value: `${effective.toFixed(2)}%` },
+              { label: "In-hand (annual)",   value: fmtINR(inHand), bold: true },
+              { label: "In-hand (monthly)",  value: fmtINR(inHand / 12), bold: true },
+            ]}
+          />
+          <div style={{ marginTop: "0.75rem", padding: "0.65rem 0.85rem", background: better === regime ? "rgba(52,211,153,0.08)" : "rgba(248,113,113,0.07)", border: `1px solid ${better === regime ? "rgba(52,211,153,0.2)" : "rgba(248,113,113,0.2)"}`, borderRadius: "var(--radius)", fontSize: "0.78rem" }}>
+            <strong style={{ color: better === regime ? "var(--success)" : "var(--error)" }}>
+              {better === regime ? "✓ You are on the better regime." : `Switch to ${better === "new" ? "New" : "Old"} Regime to save ${fmtINR(Math.abs(taxNew - taxOld))}.`}
+            </strong>
+            <div style={{ color: "var(--text-muted)", marginTop: "0.2rem", fontSize: "0.72rem" }}>New: {fmtINR(taxNew)} &nbsp;·&nbsp; Old: {fmtINR(taxOld)}</div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Page ───────────────────────────────────────────────────────────────────────
 const TABS = [
   { key: "emi",      label: "EMI" },
@@ -499,6 +891,12 @@ const TABS = [
   { key: "rd",       label: "RD" },
   { key: "gold",     label: "Gold Loan" },
   { key: "simple",   label: "Interest" },
+  { key: "ppf",      label: "PPF" },
+  { key: "stepup",   label: "Step-up SIP" },
+  { key: "goal",     label: "Goal SIP" },
+  { key: "cagr",     label: "CAGR" },
+  { key: "inflation",label: "Inflation" },
+  { key: "tax",      label: "Tax" },
 ];
 
 export default function CalculatorsPage() {
@@ -512,22 +910,46 @@ export default function CalculatorsPage() {
         <ThemePicker />
       </nav>
 
-      <div className="tabs">
+      {/* Custom scrollable tab bar — NOT using .tabs/.tab so it stays visible on mobile */}
+      <div style={{
+        display: "flex", overflowX: "auto", gap: "0.35rem",
+        padding: "0.6rem 1rem", borderBottom: "1px solid var(--border)",
+        background: "rgba(8,8,8,0.8)", flexShrink: 0,
+        scrollbarWidth: "none", WebkitOverflowScrolling: "touch",
+      }}>
         {TABS.map(t => (
-          <button key={t.key} className={`tab ${activeTab === t.key ? "active" : ""}`} onClick={() => setActiveTab(t.key)}>
+          <button
+            key={t.key}
+            onClick={() => setActiveTab(t.key)}
+            style={{
+              padding: "0.35rem 0.85rem", borderRadius: 20, border: "1.5px solid",
+              whiteSpace: "nowrap", fontSize: "0.78rem", cursor: "pointer",
+              fontFamily: "var(--font)", fontWeight: activeTab === t.key ? 700 : 500,
+              transition: "all 0.15s", flexShrink: 0,
+              borderColor: activeTab === t.key ? "var(--accent)" : "var(--border)",
+              background:  activeTab === t.key ? "rgba(108,99,255,0.15)" : "transparent",
+              color:       activeTab === t.key ? "var(--accent-light)" : "var(--text-muted)",
+            }}
+          >
             {t.label}
           </button>
         ))}
       </div>
 
       <div className="tab-content">
-        {activeTab === "emi"     && <EMICalc />}
-        {activeTab === "sip"     && <SIPCalc />}
-        {activeTab === "lumpsum" && <LumpSumCalc />}
-        {activeTab === "fd"      && <FDCalc />}
-        {activeTab === "rd"      && <RDCalc />}
-        {activeTab === "gold"    && <GoldLoanCalc />}
-        {activeTab === "simple"  && <SimpleInterestCalc />}
+        {activeTab === "emi"       && <EMICalc />}
+        {activeTab === "sip"       && <SIPCalc />}
+        {activeTab === "lumpsum"   && <LumpSumCalc />}
+        {activeTab === "fd"        && <FDCalc />}
+        {activeTab === "rd"        && <RDCalc />}
+        {activeTab === "gold"      && <GoldLoanCalc />}
+        {activeTab === "simple"    && <SimpleInterestCalc />}
+        {activeTab === "ppf"       && <PPFCalc />}
+        {activeTab === "stepup"    && <StepUpSIPCalc />}
+        {activeTab === "goal"      && <GoalSIPCalc />}
+        {activeTab === "cagr"      && <CAGRCalc />}
+        {activeTab === "inflation" && <InflationCalc />}
+        {activeTab === "tax"       && <IncomeTaxCalc />}
       </div>
     </div>
   );
